@@ -8,8 +8,7 @@ app.use(cors());
 app.use(express.json());
 
 // 🔐 Firebase 認証キーの読み込み（ファイル名に注意）
-const serviceAccount = require("./melcoco-app-firebase-adminsdk-fbsvc-e6e92263a5.json");
-
+const serviceAccount = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
