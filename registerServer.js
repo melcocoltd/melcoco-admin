@@ -1,4 +1,10 @@
 const express = require("express");
+const cors = require("cors"); // ← 追加
+
+const app = express();
+app.use(cors()); // ← これも追加
+app.use(express.json());
+const express = require("express");
 const app = express();
 app.use(express.json());
 app.post("/register", async (req, res) => {
