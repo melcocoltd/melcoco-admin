@@ -1,14 +1,33 @@
 const express = require("express");
-const cors = require("cors"); // ← 追加
+const cors = require("cors");
+const admin = require("firebase-admin");
+const nodemailer = require("nodemailer");
 
 const app = express();
-app.use(cors()); // ← これも追加
+app.use(cors());
 app.use(express.json());
-const express = require("express");
-const app = express();
-app.use(express.json());
+
+// 🔐 Firebase 認証キーの読み込み（ファイル名に注意）
+const serviceAccount = require("./melcoco-app-firebase-adminsdk-fbsvc-e6e92263a5.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+const db = admin.firestore();
+const auth = admin.auth();
+
+// 📩 nodemailer 設定
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: "melco.coltd.japan@gmail.com",
+    pass: "pnujlqpmxlbqaxdp",  },
+});
+
+// ✅ 登録エンドポイント
 app.post("/register", async (req, res) => {
-  const { email, name, salonName, prefecture } = req.body; // ← ✅ name を受け取る
+  const { email, name, salonName, prefecture } = req.body;
 
   if (!email || !salonName || !prefecture || !name) {
     return res.status(400).json({ error: "すべての必須項目を入力してください。" });
@@ -20,7 +39,7 @@ app.post("/register", async (req, res) => {
     const userRecord = await auth.createUser({
       email,
       password: defaultPassword,
-      displayName: name, // ← ✅ displayName の代わりに name を使う
+      displayName: name,
     });
 
     await db.collection("users").doc(userRecord.uid).set({
@@ -48,6 +67,7 @@ app.post("/register", async (req, res) => {
     res.status(500).json({ error: `❌ 登録失敗：${error.message}` });
   }
 });
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
