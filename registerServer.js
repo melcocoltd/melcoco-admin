@@ -1,3 +1,6 @@
+const express = require("express");
+const app = express();
+app.use(express.json());
 app.post("/register", async (req, res) => {
   const { email, name, salonName, prefecture } = req.body; // ← ✅ name を受け取る
 
@@ -38,4 +41,8 @@ app.post("/register", async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: `❌ 登録失敗：${error.message}` });
   }
+});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
