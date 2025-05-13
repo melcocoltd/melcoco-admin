@@ -49,16 +49,32 @@ app.post("/register", async (req, res) => {
       salonName,
       prefecture,
     });
+	  
+// ① 管理者（melco.coltd.japan@gmail.com）宛に申請情報を通知
+await transporter.sendMail({
+  from: '"MELCOCO申請受付" <melco.coltd.japan@gmail.com>',
+  to: "melco.coltd.japan@gmail.com",
+  subject: "【新規申請】MELCOCO 薬剤選定アプリ",
+  text: `
+▼新規申請内容：
+サロン名：${salonName}
+都道府県：${prefecture}
+氏名　　：${name}
+メール　：${email}
+  `,
+});
 
-    await transporter.sendMail({
-      from: '"MELCOCO申請受付" <melco.coltd.japan@gmail.com>',
-      to: email,
-      subject: "【登録完了】MELCOCO 薬剤選定アプリのご案内",
-      text: `
+// ② 申請者宛にパスワードなどを案内
+await transporter.sendMail({
+  from: '"MELCOCO事務局" <melco.coltd.japan@gmail.com>',
+  to: email, // ←申請者のメール
+  subject: "【MELCOCO】申請ありがとうございます",
+  text: `
 ${name} 様
 
-MELCOCO薬剤選定アプリへのご申請ありがとうございます。
-下記の情報でログインが可能です。
+MELCOCO薬剤選定アプリのご申請ありがとうございます。
+24時間以内に下記の情報でログインが可能です。
+登録が完了するまで今しばらくお待ちください。
 
 ▶ ログインURL：https://melco-hairdesign.com/pwa/register
 ▶ メールアドレス：${email}
@@ -68,8 +84,9 @@ MELCOCO薬剤選定アプリへのご申請ありがとうございます。
 　毎日ログインをお願いいたします。
 
 -- MELCOCO事務局
-      `,
-    });
+`,
+});
+
 
     res.status(200).json({ message: "✅ ユーザー登録・通知完了", uid: userRecord.uid });
   } catch (error) {
