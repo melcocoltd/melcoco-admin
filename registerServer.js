@@ -7,8 +7,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔐 Firebase 認証キーの読み込み（ファイル名に注意）
+// 🔐 Firebase 認証キー（環境変数から取得）
 const serviceAccount = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
@@ -21,7 +22,8 @@ const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
     user: "melco.coltd.japan@gmail.com",
-    pass: "pnujlqpmxlbqaxdp",  },
+    pass: "pnujlqpmxlbqaxdp", // アプリパスワード
+  },
 });
 
 // ✅ 登録エンドポイント
@@ -32,7 +34,7 @@ app.post("/register", async (req, res) => {
     return res.status(400).json({ error: "すべての必須項目を入力してください。" });
   }
 
-  const defaultPassword = "melcoco2025";
+  const defaultPassword = "melcoco";
 
   try {
     const userRecord = await auth.createUser({
@@ -50,14 +52,22 @@ app.post("/register", async (req, res) => {
 
     await transporter.sendMail({
       from: '"MELCOCO申請受付" <melco.coltd.japan@gmail.com>',
-      to: "melco.coltd.japan@gmail.com",
-      subject: "【新規申請】MELCOCO 薬剤選定アプリ",
+      to: email,
+      subject: "【登録完了】MELCOCO 薬剤選定アプリのご案内",
       text: `
-▼新規申請内容：
-サロン名：${salonName}
-都道府県：${prefecture}
-氏名　　：${name}
-メール　：${email}
+${name} 様
+
+MELCOCO薬剤選定アプリへのご申請ありがとうございます。
+下記の情報でログインが可能です。
+
+▶ ログインURL：https://melco-hairdesign.com/pwa/register
+▶ メールアドレス：${email}
+▶ パスワード：melcoco
+
+※セキュリティの都合上、24時間で自動ログアウトされます。
+　毎日ログインをお願いいたします。
+
+-- MELCOCO事務局
       `,
     });
 
@@ -67,6 +77,7 @@ app.post("/register", async (req, res) => {
   }
 });
 
+// 🚀 サーバー起動
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);

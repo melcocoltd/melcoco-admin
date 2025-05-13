@@ -12,7 +12,7 @@ const auth = admin.auth();
 
 async function registerUser() {
   const email = "newuser@example.com";
-  const password = "melcoco2025";
+  const password = "melcoco";
   const displayName = "新規会員";
 
   console.log("▶️ ユーザー登録処理を開始");
