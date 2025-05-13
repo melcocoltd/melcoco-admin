@@ -73,10 +73,10 @@ await transporter.sendMail({
 ${name} 様
 
 MELCOCO薬剤選定アプリのご申請ありがとうございます。
-24時間以内に下記の情報でログインが可能です。
+24時間以内に下記の情報でログインが可能になります。
 登録が完了するまで今しばらくお待ちください。
 
-▶ ログインURL：https://melco-hairdesign.com/pwa/register
+▶ ログインURL：https://melco-hairdesign.com/pwa/login.html
 ▶ メールアドレス：${email}
 ▶ パスワード：melcoco
 
