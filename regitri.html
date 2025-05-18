@@ -137,15 +137,17 @@
       timer: { loginCount: 0 }
     };
 
-    const formData = {
-      salonName: document.getElementById("salonName").value,
-      prefecture: document.getElementById("prefecture").value,
-      name: document.getElementById("name").value,
-      email: document.getElementById("email").value,
-      apps: appsObject,
-      status: "trial"
-    };
-
+const formData = {
+  salonName: document.getElementById("salonName").value,
+  prefecture: document.getElementById("prefecture").value,
+  name: document.getElementById("name").value,
+  email: document.getElementById("email").value,
+  status: "trial",
+  apps: {
+    agent: { loginCount: 0 },
+    timer: { loginCount: 0 }
+  }
+};
     try {
       const res = await fetch("https://melcoco-admin.onrender.com/registerTrialUser", {
         method: "POST",
