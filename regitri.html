@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MELCOCOアプリ体験版申請フォーム</title>
+  <style>
+    body {
+      min-height: 100vh;
+      font-family: sans-serif;
+      background: linear-gradient(to bottom, #f0f0f0, #696969);
+      max-width: 600px;
+      margin: auto;
+      padding: 20px;
+    }
+    h1, h2 {
+      text-align: center;
+      color: #333;
+    }
+    form {
+      background: #fff;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    label {
+      font-weight: bold;
+      display: block;
+      margin-top: 15px;
+    }
+    input, select, button {
+      width: 100%;
+      padding: 10px;
+      margin-top: 5px;
+      font-size: 1em;
+      box-sizing: border-box;
+    }
+    button {
+      background: #696969;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      margin-top: 20px;
+    }
+    #response {
+      margin-top: 15px;
+      font-weight: bold;
+      color: green;
+    }
+  </style>
+</head>
+<body>
+  <h2>体験版アプリ利用申請</h2>
+  <form id="registerForm">
+    <label for="salonName">サロン名</label>
+    <input type="text" id="salonName" name="salonName" required />
+
+    <label for="prefecture">都道府県</label>
+    <select id="prefecture" name="prefecture" required>
+      <option value="">選択してください</option>
+      <option value="北海道">北海道</option>
+      <option value="青森県">青森県</option>
+      <option value="岩手県">岩手県</option>
+      <option value="宮城県">宮城県</option>
+      <option value="秋田県">秋田県</option>
+      <option value="山形県">山形県</option>
+      <option value="福島県">福島県</option>
+      <option value="茨城県">茨城県</option>
+      <option value="栃木県">栃木県</option>
+      <option value="群馬県">群馬県</option>
+      <option value="埼玉県">埼玉県</option>
+      <option value="千葉県">千葉県</option>
+      <option value="東京都">東京都</option>
+      <option value="神奈川県">神奈川県</option>
+      <option value="新潟県">新潟県</option>
+      <option value="富山県">富山県</option>
+      <option value="石川県">石川県</option>
+      <option value="福井県">福井県</option>
+      <option value="山梨県">山梨県</option>
+      <option value="長野県">長野県</option>
+      <option value="岐阜県">岐阜県</option>
+      <option value="静岡県">静岡県</option>
+      <option value="愛知県">愛知県</option>
+      <option value="三重県">三重県</option>
+      <option value="滋賀県">滋賀県</option>
+      <option value="京都府">京都府</option>
+      <option value="大阪府">大阪府</option>
+      <option value="兵庫県">兵庫県</option>
+      <option value="奈良県">奈良県</option>
+      <option value="和歌山県">和歌山県</option>
+      <option value="鳥取県">鳥取県</option>
+      <option value="島根県">島根県</option>
+      <option value="岡山県">岡山県</option>
+      <option value="広島県">広島県</option>
+      <option value="山口県">山口県</option>
+      <option value="徳島県">徳島県</option>
+      <option value="香川県">香川県</option>
+      <option value="愛媛県">愛媛県</option>
+      <option value="高知県">高知県</option>
+      <option value="福岡県">福岡県</option>
+      <option value="佐賀県">佐賀県</option>
+      <option value="長崎県">長崎県</option>
+      <option value="熊本県">熊本県</option>
+      <option value="大分県">大分県</option>
+      <option value="宮崎県">宮崎県</option>
+      <option value="鹿児島県">鹿児島県</option>
+      <option value="沖縄県">沖縄県</option>
+      <!-- Prefecture options... -->
+    </select>
+
+    <label for="name">氏名</label>
+    <input type="text" id="name" name="name" required />
+
+    <label for="email">メールアドレス</label>
+    <input type="email" id="email" name="email" required />
+
+
+  
+  <button id="submitBtn" type="submit">申請する</button>
+    <p id="response"></p>
+  </form>
+
+<script>
+  document.getElementById("registerForm").addEventListener("submit", async function (e) {
+    e.preventDefault();
+
+    const submitBtn = document.getElementById("submitBtn");
+    const responseEl = document.getElementById("response");
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = "送信中...";
+    submitBtn.style.backgroundColor = "#999";
+
+    // ✅ 両方のアプリを自動で含める（選択不要）
+    const appsObject = {
+      agent: { loginCount: 0 },
+      timer: { loginCount: 0 }
+    };
+
+    const formData = {
+      salonName: document.getElementById("salonName").value,
+      prefecture: document.getElementById("prefecture").value,
+      name: document.getElementById("name").value,
+      email: document.getElementById("email").value,
+      apps: appsObject,
+      status: "trial"
+    };
+
+    try {
+      const res = await fetch("https://melcoco-admin.onrender.com/registerTrialUser", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData),
+      });
+
+      const result = await res.json();
+
+      if (res.ok) {
+        responseEl.textContent = "✅ 申請を送信しました。※確認メールが届かない場合は迷惑メールフォルダをご確認ください。";
+        responseEl.style.color = "green";
+        submitBtn.textContent = "送信完了";
+        submitBtn.style.backgroundColor = "#202020";
+      } else {
+        responseEl.textContent = "❌ エラー：" + result.error;
+        responseEl.style.color = "red";
+        submitBtn.textContent = "❌ エラー";
+        submitBtn.style.backgroundColor = "#dc3545";
+      }
+    } catch (err) {
+      responseEl.textContent = "❌ 通信エラー：" + err.message;
+      responseEl.style.color = "red";
+      submitBtn.textContent = "❌ 通信エラー";
+      submitBtn.style.backgroundColor = "#dc3545";
+    }
+  });
+</script>	</body>
+</html>
