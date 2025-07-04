@@ -1,31 +1,43 @@
-// registerServer.js（体験版＋本会員どちらも対応）
-
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔑 Firebase 初期化（環境変数から秘密鍵を読み込む）
-const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_KEY_JSON);
+// 🔑 Firebase秘密鍵（base64）読み込み＆検証
+let serviceAccount;
+try {
+  if (!process.env.FIREBASE_KEY_BASE64) {
+    throw new Error("❌ 環境変数 FIREBASE_KEY_BASE64 が未定義です。");
+  }
+  const jsonString = Buffer.from(process.env.FIREBASE_KEY_BASE64, "base64").toString("utf8");
+  serviceAccount = JSON.parse(jsonString);
+  console.log("✅ Firebase鍵の読み込み成功（length: " + jsonString.length + "）");
+} catch (error) {
+  console.error("❌ Firebase鍵の読み込み失敗:", error.message);
+  process.exit(1);
+}
+
+// 🔥 Firebase 初期化
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 const db = admin.firestore();
 const auth = admin.auth();
 
-// 📩 メール送信設定
+// 📩 Gmailメール送信用
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
     user: "melco.coltd.japan@gmail.com",
-    pass: "pnujlqpmxlbqaxdp",
+    pass: "pnujlqpmxlbqaxdp", // ← 2段階認証を使っているなら「アプリパスワード」
   },
 });
 
-// ✅ ユーザー登録エンドポイント（statusで体験版 or 本会員を切替）
+// ✅ 登録エンドポイント（体験版 or 本会員）
 app.post("/register", async (req, res) => {
   const { email, name, salonName, prefecture, apps, status } = req.body;
 
@@ -43,7 +55,7 @@ app.post("/register", async (req, res) => {
       displayName: name,
     });
 
-    // Firestore に登録
+    // Firestore にユーザーデータ保存
     await db.collection("users").doc(userRecord.uid).set({
       status,
       email,
@@ -53,7 +65,7 @@ app.post("/register", async (req, res) => {
       ...(trialMode && { trialStartDate: new Date().toISOString() })
     });
 
-    // 管理者通知メール
+    // 🔔 管理者通知メール
     await transporter.sendMail({
       from: '"MELCOCOサポート" <melco.coltd.japan@gmail.com>',
       to: "melco.coltd.japan@gmail.com",
@@ -68,7 +80,7 @@ app.post("/register", async (req, res) => {
       `,
     });
 
-    // 申請者へのメール
+    // 🔔 申請者への案内メール
     await transporter.sendMail({
       from: '"MELCOCOサポート" <melco.coltd.japan@gmail.com>',
       to: email,
@@ -109,11 +121,12 @@ MELCOCOサポート
 
     res.status(200).json({ message: "登録成功", uid: userRecord.uid });
   } catch (error) {
+    console.error("❌ 登録失敗:", error.message);
     res.status(500).json({ error: `登録失敗: ${error.message}` });
   }
 });
 
-// サーバー起動
+// ✅ サーバー起動
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
