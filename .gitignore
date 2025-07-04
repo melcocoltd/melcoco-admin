@@ -1,2 +1,3 @@
 node_modules/
 melcoco-app-firebase-adminsdk-*.json
+.env

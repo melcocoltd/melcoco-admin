@@ -1,15 +1,15 @@
+// registerServer.js（体験版＋本会員どちらも対応）
+
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
-
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔐 Firebase 認証キー（環境変数から取得）
-const serviceAccount = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
-
+// 🔑 Firebase 初期化（秘密鍵ファイルを直接読み込む）
+const serviceAccount = require("./melcoco-app-firebase-adminsdk-fbsvc-e6e92263a5.json");
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
@@ -17,24 +17,25 @@ admin.initializeApp({
 const db = admin.firestore();
 const auth = admin.auth();
 
-// 📩 nodemailer 設定
+// 📩 メール送信設定
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
     user: "melco.coltd.japan@gmail.com",
-    pass: "pnujlqpmxlbqaxdp", // アプリパスワード
+    pass: "pnujlqpmxlbqaxdp",
   },
 });
 
-// ✅ 登録エンドポイント
+// ✅ ユーザー登録エンドポイント（statusで体験版 or 本会員を切替）
 app.post("/register", async (req, res) => {
-  const { email, name, salonName, prefecture } = req.body;
+  const { email, name, salonName, prefecture, apps, status } = req.body;
 
-  if (!email || !salonName || !prefecture || !name) {
-    return res.status(400).json({ error: "すべての必須項目を入力してください。" });
+  if (!email || !salonName || !prefecture || !name || !status) {
+    return res.status(400).json({ error: "必要な情報が不足しています。" });
   }
 
   const defaultPassword = "melcoco";
+  const trialMode = status === "trial";
 
   try {
     const userRecord = await auth.createUser({
@@ -43,59 +44,78 @@ app.post("/register", async (req, res) => {
       displayName: name,
     });
 
+    // Firestore に登録
     await db.collection("users").doc(userRecord.uid).set({
-      status: "inactive",
+      status,
+      email,
       displayName: name,
       salonName,
       prefecture,
+      ...(trialMode && { trialStartDate: new Date().toISOString() })
     });
-	  
-// ① 管理者（melco.coltd.japan@gmail.com）宛に申請情報を通知
-await transporter.sendMail({
-  from: '"MELCOCO申請受付" <melco.coltd.japan@gmail.com>',
-  to: "melco.coltd.japan@gmail.com",
-  subject: "【新規申請】MELCOCO 薬剤選定アプリ",
-  text: `
-▼新規申請内容：
-サロン名：${salonName}
-都道府県：${prefecture}
-氏名　　：${name}
-メール　：${email}
-  `,
-});
 
-// ② 申請者宛にパスワードなどを案内
-await transporter.sendMail({
-  from: '"MELCOCO事務局" <melco.coltd.japan@gmail.com>',
-  to: email, // ←申請者のメール
-  subject: "【MELCOCO】申請ありがとうございます",
-  text: `
+    // 管理者通知メール
+    await transporter.sendMail({
+      from: '"MELCOCOサポート" <melco.coltd.japan@gmail.com>',
+      to: "melco.coltd.japan@gmail.com",
+      subject: `【MELCOCO】${trialMode ? "体験版" : "本会員"}アプリ申請が届きました`,
+      text: `
+【申請内容】
+サロン名: ${salonName}
+都道府県: ${prefecture}
+氏名: ${name}
+メール: ${email}
+対象アプリ: ${JSON.stringify(apps || ["agent", "timer"], null, 2)}
+      `,
+    });
+
+    // 申請者へのメール
+    await transporter.sendMail({
+      from: '"MELCOCOサポート" <melco.coltd.japan@gmail.com>',
+      to: email,
+      subject: trialMode ? "【MELCOCO】体験版アプリのご案内" : "【MELCOCO】ご登録ありがとうございます",
+      text: trialMode
+        ? `
 ${name} 様
 
-MELCOCO薬剤選定アプリのご申請ありがとうございます。
-24時間以内に下記の情報でログインが可能になります。
-登録が完了するまで今しばらくお待ちください。
+MELCOCOアプリ体験版へのお申し込みありがとうございます。
+7日間の利用制限がありますが、以下のURLよりログインいただけます。
 
-▶ ログインURL：https://melco-hairdesign.com/pwa/login.html
-▶ メールアドレス：${email}
-▶ パスワード：melcoco
+ログインURL:
+https://melco-hairdesign.com/pwa/login.html
 
-※セキュリティの都合上、24時間で自動ログアウトされます。
-　毎日ログインをお願いいたします。
+ログインパスワード: melcoco
 
--- MELCOCO事務局
-`,
-});
+※体験版は7日間ご利用いただけます。
+ご不明点がございましたら、お気軽にお問い合わせください。
 
+MELCOCOサポート
+        `
+        : `
+${name} 様
 
-    res.status(200).json({ message: "✅ ユーザー登録・通知完了", uid: userRecord.uid });
+この度はMELCOCOアプリへのご登録ありがとうございます。
+以下のURLよりログインが可能です。
+
+ログインURL:
+https://melco-hairdesign.com/pwa/login.html
+
+ログインパスワード: melcoco
+
+今後ともよろしくお願いいたします。
+
+MELCOCOサポート
+        `,
+    });
+
+    res.status(200).json({ message: "登録成功", uid: userRecord.uid });
   } catch (error) {
-    res.status(500).json({ error: `❌ 登録失敗：${error.message}` });
+    res.status(500).json({ error: `登録失敗: ${error.message}` });
   }
 });
 
-// 🚀 サーバー起動
+// サーバー起動
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`✅ Server running on port ${PORT}`);
 });
