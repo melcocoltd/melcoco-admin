@@ -8,12 +8,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔑 Firebase 初期化（秘密鍵ファイルを直接読み込む）
-const serviceAccount = require("./melcoco-app-firebase-adminsdk-fbsvc-e6e92263a5.json");
+// 🔑 Firebase 初期化（環境変数から秘密鍵を読み込む）
+const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_KEY_JSON);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
-
 const db = admin.firestore();
 const auth = admin.auth();
 
