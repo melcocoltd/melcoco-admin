@@ -76,7 +76,6 @@ app.post("/register", async (req, res) => {
 都道府県: ${prefecture}
 氏名: ${name}
 メール: ${email}
-対象アプリ: ${JSON.stringify(apps || ["agent", "timer"], null, 2)}
       `,
     });
 
@@ -90,17 +89,29 @@ app.post("/register", async (req, res) => {
 ${name} 様
 
 MELCOCOアプリ体験版へのお申し込みありがとうございます。
-7日間の利用制限がありますが、以下のURLよりログインいただけます。
+7日間の無料体験期間中、以下のURLからログインしてご利用いただけます。
 
 ログインURL:
 https://melco-hairdesign.com/pwa/login.html
 
 ログインパスワード: melcoco
 
-※体験版は7日間ご利用いただけます。
-ご不明点がございましたら、お気軽にお問い合わせください。
+※体験版のご利用期間は7日間です。
+継続してご利用されたい場合は、有料オンラインサロン
+「ココナッツ研究室」へご入会ください。
+
+▶︎ ご案内ページ：
+https://melcoco.jp/coconut-lab/
+
+⸻
+
+ご不明な点がございましたら、お気軽にお問い合わせください。
+今後ともどうぞよろしくお願いいたします。
+
+⸻
 
 MELCOCOサポート
+
         `
         : `
 ${name} 様
