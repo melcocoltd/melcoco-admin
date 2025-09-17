@@ -8,13 +8,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// --- Firebase 秘密鍵（base64） ---
+// ---------- Firebase秘密鍵（base64）読み込み ----------
 let serviceAccount;
 try {
-  if (!process.env.FIREBASE_KEY_BASE64) {
-    throw new Error("FIREBASE_KEY_BASE64 is undefined");
-  }
-  const jsonString = Buffer.from(process.env.FIREBASE_KEY_BASE64, "base64").toString("utf8");
+  const b64 = process.env.FIREBASE_KEY_BASE64;
+  if (!b64) throw new Error("FIREBASE_KEY_BASE64 is undefined");
+  const jsonString = Buffer.from(b64, "base64").toString("utf8");
   serviceAccount = JSON.parse(jsonString);
   console.log("✅ Firebase key loaded (length:", jsonString.length, ")");
 } catch (err) {
@@ -22,28 +21,30 @@ try {
   process.exit(1);
 }
 
-// --- Firebase 初期化 ---
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
+// ---------- Firebase 初期化 ----------
+admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 const auth = admin.auth();
 
-// --- Nodemailer (Gmail アプリパス推奨) ---
+// ---------- Nodemailer (Gmail アプリパスワード) ----------
+if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+  console.warn("⚠️ SMTP_USER / SMTP_PASS is missing. Emails will fail.");
+}
 const transporter = nodemailer.createTransport({
+  // Gmailは service 指定でもOK。診断性を上げたいときは host/port に切替可能。
   service: "gmail",
   auth: {
-    user: process.env.SMTP_USER || "melco.coltd.japan@gmail.com",
-    pass: process.env.SMTP_PASS, // ← Render の環境変数に置く（アプリパスワード）
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS, // ← Googleの「アプリパスワード」16桁
   },
   connectionTimeout: 10000,
   socketTimeout: 10000,
 });
 
-// ヘルスチェック
+// ---------- ヘルスチェック ----------
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-// 申請受付（体験版 / 本会員）
+// ---------- 申請受付（体験版 / 本会員） ----------
 app.post("/register", async (req, res) => {
   const { email, name, salonName, prefecture, apps, status } = req.body || {};
   if (!email || !salonName || !prefecture || !name || !status) {
@@ -54,14 +55,14 @@ app.post("/register", async (req, res) => {
   const trialMode = status === "trial";
 
   try {
-    // 1) Firebase Auth ユーザー作成
+    // 1) Firebase Auth 作成
     const userRecord = await auth.createUser({
       email,
       password: defaultPassword,
       displayName: name,
     });
 
-    // 2) Firestore 登録
+    // 2) Firestore 保存
     await db.collection("users").doc(userRecord.uid).set({
       status,
       email,
@@ -72,16 +73,21 @@ app.post("/register", async (req, res) => {
       ...(trialMode && { trialStartDate: new Date().toISOString() }),
     });
 
-    // 3) 先に200を返す（メール送信でブロックしない）
+    // 3) まずは応答を返す（メール送信でブロックしない）
     res.status(201).json({ ok: true, uid: userRecord.uid });
 
-    // 4) 背景でメール送信（失敗はログ出しのみ）
-    sendAdminMail({ email, name, salonName, prefecture, apps, trialMode }).catch(console.error);
-    sendUserMail({ email, name, trialMode }).catch(console.error);
+    // 4) 裏でメール送信（失敗はログに残す）
+    sendAdminMail({ email, name, salonName, prefecture, apps, trialMode }).catch((e) =>
+      console.error("admin mail error:", e)
+    );
+    sendUserMail({ email, name, trialMode }).catch((e) =>
+      console.error("user mail error:", e)
+    );
 
-    // （必要なら）メール確認リンクも送る
     if (process.env.SEND_VERIFY_LINK === "true") {
-      sendVerificationEmail(email).catch(console.error);
+      sendVerificationEmail(email).catch((e) =>
+        console.error("verify mail error:", e)
+      );
     }
   } catch (e) {
     console.error("register error:", e);
@@ -89,7 +95,7 @@ app.post("/register", async (req, res) => {
   }
 });
 
-// 管理者通知
+// ---------- 管理者通知 ----------
 async function sendAdminMail({ email, name, salonName, prefecture, apps, trialMode }) {
   const subject = `【MELCOCO】${trialMode ? "体験版" : "本会員"}アプリ申請が届きました`;
   const text = [
@@ -102,14 +108,14 @@ async function sendAdminMail({ email, name, salonName, prefecture, apps, trialMo
   ].join("\n");
 
   await transporter.sendMail({
-    from: `"MELCOCOサポート" <${process.env.SMTP_USER || "melco.coltd.japan@gmail.com"}>`,
-    to: process.env.ADMIN_MAIL_TO || (process.env.SMTP_USER || "melco.coltd.japan@gmail.com"),
+    from: `"MELCOCOサポート" <${process.env.SMTP_USER}>`,
+    to: process.env.ADMIN_MAIL_TO || process.env.SMTP_USER,
     subject,
     text,
   });
 }
 
-// 申請者向けメール（体験版の案内）
+// ---------- 申請者向けメール ----------
 async function sendUserMail({ email, name, trialMode }) {
   const loginUrl = process.env.LOGIN_URL || "https://melco-hairdesign.com/pwa/login.html";
   const subject = trialMode
@@ -123,7 +129,7 @@ async function sendUserMail({ email, name, trialMode }) {
         "MELCOCOアプリ体験版へのお申し込みありがとうございます。",
         "7日間の無料体験期間中、以下のURLからログインしてご利用いただけます。",
         "",
-        `ログインURL:`,
+        "ログインURL:",
         loginUrl,
         "",
         "ログインパスワード: melcoco",
@@ -149,14 +155,14 @@ async function sendUserMail({ email, name, trialMode }) {
       ];
 
   await transporter.sendMail({
-    from: `"MELCOCOサポート" <${process.env.SMTP_USER || "melco.coltd.japan@gmail.com"}>`,
+    from: `"MELCOCOサポート" <${process.env.SMTP_USER}>`,
     to: email,
     subject,
     text: lines.join("\n"),
   });
 }
 
-// Firebase の確認メールリンクを生成して送信（任意）
+// ---------- Firebase メール確認リンク（任意） ----------
 async function sendVerificationEmail(email) {
   const actionCodeSettings = {
     url: process.env.ACTION_URL || "https://melco-hairdesign.com/pwa/login.html",
@@ -165,13 +171,40 @@ async function sendVerificationEmail(email) {
   const link = await admin.auth().generateEmailVerificationLink(email, actionCodeSettings);
 
   await transporter.sendMail({
-    from: `"MELCOCOサポート" <${process.env.SMTP_USER || "melco.coltd.japan@gmail.com"}>`,
+    from: `"MELCOCOサポート" <${process.env.SMTP_USER}>`,
     to: email,
     subject: "【MELCOCO】メールアドレスの確認",
     html: `<p>以下のリンクをクリックしてメール確認を完了してください。</p><p><a href="${link}">${link}</a></p>`,
   });
 }
 
-// --- Render 必須: PORT で listen ---
+// ---------- デバッグ用エンドポイント ----------
+app.get("/debug/email/verify", async (_req, res) => {
+  try {
+    const info = await transporter.verify();
+    res.json({ ok: true, info });
+  } catch (e) {
+    console.error("SMTP verify error:", e);
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+app.get("/debug/email/test", async (req, res) => {
+  try {
+    const to = req.query.to || process.env.SMTP_USER;
+    const r = await transporter.sendMail({
+      from: `"MELCOCOサポート" <${process.env.SMTP_USER}>`,
+      to,
+      subject: "【テスト】MELCOCO メール送信テスト",
+      text: "このメールが届けばSMTPは正常です。",
+    });
+    res.json({ ok: true, accepted: r.accepted, response: r.response });
+  } catch (e) {
+    console.error("SMTP test send error:", e);
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+// ---------- Render必須: PORTでlisten ----------
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
