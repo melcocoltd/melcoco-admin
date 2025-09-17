@@ -31,14 +31,27 @@ if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
   console.warn("⚠️ SMTP_USER / SMTP_PASS is missing. Emails will fail.");
 }
 const transporter = nodemailer.createTransport({
+<<<<<<< HEAD
   // Gmailは service 指定でもOK。診断性を上げたいときは host/port に切替可能。
   service: "gmail",
+=======
+  host: "smtp.gmail.com",
+  port: 587,          // ← 587 に変更
+  secure: false,      // ← STARTTLS を使うので false
+  requireTLS: true,   // ← 接続後に TLS を必須化
+>>>>>>> 9f94600 (chore: smtp via 587 STARTTLS (avoid 465 timeouts))
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS, // ← Googleの「アプリパスワード」16桁
   },
+<<<<<<< HEAD
   connectionTimeout: 10000,
   socketTimeout: 10000,
+=======
+  connectionTimeout: 20000,
+  socketTimeout: 20000,
+  tls: { minVersion: "TLSv1.2", servername: "smtp.gmail.com" }
+>>>>>>> 9f94600 (chore: smtp via 587 STARTTLS (avoid 465 timeouts))
 });
 
 // ---------- ヘルスチェック ----------
