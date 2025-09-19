@@ -2,7 +2,7 @@
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const nodemailer = require("nodemailer");
+const { google } = require("googleapis");
 
 const app = express();
 app.use(cors());
@@ -26,23 +26,44 @@ admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 const auth = admin.auth();
 
-// ---------- Nodemailer (Gmail アプリパスワード) ----------
-if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-  console.warn("⚠️ SMTP_USER / SMTP_PASS is missing. Emails will fail.");
+// ---------- Gmail API（OAuth2） ----------
+const GMAIL_USER = process.env.GMAIL_USER;
+const FROM = process.env.SMTP_FROM || `"MELCOCOサポート" <${GMAIL_USER}>`;
+
+const oAuth2Client = new google.auth.OAuth2(
+  process.env.GMAIL_CLIENT_ID,
+  process.env.GMAIL_CLIENT_SECRET
+  // redirect_uri は送信時は不要
+);
+oAuth2Client.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
+
+function toBase64Url(str) {
+  return Buffer.from(str)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,        // STARTTLS を使うので false
-  requireTLS: true,     // 接続後に TLS 必須
-  auth: {
-    user: process.env.SMTP_USER,     // 送信元Gmail
-    pass: process.env.SMTP_PASS,     // 16桁のアプリパスワード
-  },
-  connectionTimeout: 20000,
-  socketTimeout: 20000,
-  tls: { minVersion: "TLSv1.2", servername: "smtp.gmail.com" },
-});
+
+/** Gmail API でプレーンテキストメール送信 */
+async function sendViaGmailAPI({ to, subject, text }) {
+  const gmail = google.gmail({ version: "v1", auth: oAuth2Client });
+
+  const raw =
+    `From: ${FROM}\r\n` +
+    `To: ${to}\r\n` +
+    `Subject: ${subject}\r\n` +
+    `MIME-Version: 1.0\r\n` +
+    `Content-Type: text/plain; charset="UTF-8"\r\n` +
+    `Content-Transfer-Encoding: 7bit\r\n\r\n` +
+    `${text}`;
+
+  const res = await gmail.users.messages.send({
+    userId: "me",
+    requestBody: { raw: toBase64Url(raw) },
+  });
+  return res.data;
+}
 
 // ---------- ヘルスチェック ----------
 app.get("/health", (_req, res) => res.json({ ok: true }));
@@ -76,19 +97,19 @@ app.post("/register", async (req, res) => {
       ...(trialMode && { trialStartDate: new Date().toISOString() }),
     });
 
-    // 3) まずは応答を返す（メール送信でブロックしない）
+    // 3) まず応答を返す
     res.status(201).json({ ok: true, uid: userRecord.uid });
 
-    // 4) 裏でメール送信（失敗はログに残す）
-    sendAdminMail({ email, name, salonName, prefecture, apps, trialMode }).catch((e) =>
+    // 4) メール送信（裏側で）
+    sendAdminMail({ email, name, salonName, prefecture, apps, trialMode }).catch(e =>
       console.error("admin mail error:", e)
     );
-    sendUserMail({ email, name, trialMode }).catch((e) =>
+    sendUserMail({ email, name, trialMode }).catch(e =>
       console.error("user mail error:", e)
     );
 
     if (process.env.SEND_VERIFY_LINK === "true") {
-      sendVerificationEmail(email).catch((e) =>
+      sendVerificationEmail(email).catch(e =>
         console.error("verify mail error:", e)
       );
     }
@@ -110,9 +131,8 @@ async function sendAdminMail({ email, name, salonName, prefecture, apps, trialMo
     `対象アプリ: ${JSON.stringify(apps || ["agent", "timer"])}`,
   ].join("\n");
 
-  await transporter.sendMail({
-    from: `"MELCOCOサポート" <${process.env.SMTP_USER}>`,
-    to: process.env.ADMIN_MAIL_TO || process.env.SMTP_USER,
+  await sendViaGmailAPI({
+    to: process.env.ADMIN_MAIL_TO || GMAIL_USER,
     subject,
     text,
   });
@@ -157,8 +177,7 @@ async function sendUserMail({ email, name, trialMode }) {
         "MELCOCOサポート",
       ];
 
-  await transporter.sendMail({
-    from: `"MELCOCOサポート" <${process.env.SMTP_USER}>`,
+  await sendViaGmailAPI({
     to: email,
     subject,
     text: lines.join("\n"),
@@ -173,37 +192,35 @@ async function sendVerificationEmail(email) {
   };
   const link = await admin.auth().generateEmailVerificationLink(email, actionCodeSettings);
 
-  await transporter.sendMail({
-    from: `"MELCOCOサポート" <${process.env.SMTP_USER}>`,
+  await sendViaGmailAPI({
     to: email,
     subject: "【MELCOCO】メールアドレスの確認",
-    html: `<p>以下のリンクをクリックしてメール確認を完了してください。</p><p><a href="${link}">${link}</a></p>`,
+    text: `以下のリンクをクリックしてメール確認を完了してください。\n${link}`,
   });
 }
 
 // ---------- デバッグ用エンドポイント ----------
 app.get("/debug/email/verify", async (_req, res) => {
   try {
-    const info = await transporter.verify();
-    res.json({ ok: true, info });
+    const token = (await oAuth2Client.getAccessToken()).token;
+    res.json({ ok: true, tokenExists: !!token });
   } catch (e) {
-    console.error("SMTP verify error:", e);
+    console.error("OAuth verify error:", e);
     res.status(500).json({ ok: false, error: e.message || String(e) });
   }
 });
 
 app.get("/debug/email/test", async (req, res) => {
   try {
-    const to = req.query.to || process.env.SMTP_USER;
-    const r = await transporter.sendMail({
-      from: `"MELCOCOサポート" <${process.env.SMTP_USER}>`,
+    const to = req.query.to || GMAIL_USER;
+    const r = await sendViaGmailAPI({
       to,
-      subject: "【テスト】MELCOCO メール送信テスト",
-      text: "このメールが届けばSMTPは正常です。",
+      subject: "【テスト】MELCOCO Gmail API送信",
+      text: "このメールが届けば Gmail API 経由で送れています。",
     });
-    res.json({ ok: true, accepted: r.accepted, response: r.response });
+    res.json({ ok: true, id: r.id, labelIds: r.labelIds });
   } catch (e) {
-    console.error("SMTP test send error:", e);
+    console.error("Gmail API test send error:", e);
     res.status(500).json({ ok: false, error: e.message || String(e) });
   }
 });
