@@ -46,25 +46,40 @@ function toBase64Url(str) {
 }
 
 /** Gmail API でプレーンテキストメール送信 */
+// ===== ここを置き換え：UTF-8 + Base64 で安全に送る =====
+function encodeHeaderUTF8(str) {
+  return `=?UTF-8?B?${Buffer.from(str, "utf8").toString("base64")}?=`;
+}
+function chunk76(b64) {
+  return b64.replace(/.{1,76}/g, (m) => m + "\r\n").trim();
+}
+
 async function sendViaGmailAPI({ to, subject, text }) {
   const gmail = google.gmail({ version: "v1", auth: oAuth2Client });
 
+  // ヘッダーは RFC2047 で Base64
+  const fromHeader = `${encodeHeaderUTF8("MELCOCOサポート")} <${GMAIL_USER}>`;
+  const subjectHeader = encodeHeaderUTF8(subject);
+
+  // 本文は UTF-8 Base64（76文字改行）
+  const bodyB64 = chunk76(Buffer.from(text, "utf8").toString("base64"));
+
   const raw =
-    `From: ${FROM}\r\n` +
+    `From: ${fromHeader}\r\n` +
     `To: ${to}\r\n` +
-    `Subject: ${subject}\r\n` +
+    `Subject: ${subjectHeader}\r\n` +
     `MIME-Version: 1.0\r\n` +
-    `Content-Type: text/plain; charset="UTF-8"\r\n` +
-    `Content-Transfer-Encoding: 7bit\r\n\r\n` +
-    `${text}`;
+    `Content-Type: text/plain; charset=UTF-8\r\n` +
+    `Content-Transfer-Encoding: base64\r\n` +
+    `\r\n` +
+    `${bodyB64}\r\n`;
 
   const res = await gmail.users.messages.send({
     userId: "me",
-    requestBody: { raw: toBase64Url(raw) },
+    requestBody: { raw: Buffer.from(raw).toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"") },
   });
   return res.data;
 }
-
 // ---------- ヘルスチェック ----------
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
@@ -170,7 +185,11 @@ async function sendUserMail({ email, name, trialMode }) {
         `${name} 様`,
         "",
         "MELCOCOアプリへのお申し込みありがとうございます。",
-        `ログインURL: ${loginUrl}`,
+        "",
+        "ログインURL:",
+        loginUrl,
+        "",
+        "ログインパスワード: melcoco",
         "",
         "ご不明な点がございましたら、お気軽にお問い合わせください。",
         "",
