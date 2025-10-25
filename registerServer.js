@@ -2,7 +2,7 @@
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const { google } = require("googleapis");
+const nodemailer = require("nodemailer");
 
 const app = express();
 app.use(cors());
@@ -26,60 +26,31 @@ admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 const auth = admin.auth();
 
-// ---------- Gmail API（OAuth2） ----------
-const GMAIL_USER = process.env.GMAIL_USER;
-const FROM = process.env.SMTP_FROM || `"MELCOCOサポート" <${GMAIL_USER}>`;
+// ---------- メール送信（SMTP / Gmailアプリパスワード） ----------
+const SMTP_USER = process.env.SMTP_USER; // 送信元Gmail
+const FROM =
+  process.env.SMTP_FROM || `"MELCOCOサポート" <${SMTP_USER}>`;
 
-const oAuth2Client = new google.auth.OAuth2(
-  process.env.GMAIL_CLIENT_ID,
-  process.env.GMAIL_CLIENT_SECRET
-  // redirect_uri は送信時は不要
-);
-oAuth2Client.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST || "smtp.gmail.com",
+  port: Number(process.env.SMTP_PORT || 465),
+  secure: String(process.env.SMTP_SECURE || "true") !== "false", // "true"ならtrue
+  auth: {
+    user: SMTP_USER,
+    pass: process.env.SMTP_PASS, // Googleのアプリパスワード（16桁）
+  },
+});
 
-function toBase64Url(str) {
-  return Buffer.from(str)
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-}
-
-/** Gmail API でプレーンテキストメール送信 */
-// ===== ここを置き換え：UTF-8 + Base64 で安全に送る =====
-function encodeHeaderUTF8(str) {
-  return `=?UTF-8?B?${Buffer.from(str, "utf8").toString("base64")}?=`;
-}
-function chunk76(b64) {
-  return b64.replace(/.{1,76}/g, (m) => m + "\r\n").trim();
-}
-
-async function sendViaGmailAPI({ to, subject, text }) {
-  const gmail = google.gmail({ version: "v1", auth: oAuth2Client });
-
-  // ヘッダーは RFC2047 で Base64
-  const fromHeader = `${encodeHeaderUTF8("MELCOCOサポート")} <${GMAIL_USER}>`;
-  const subjectHeader = encodeHeaderUTF8(subject);
-
-  // 本文は UTF-8 Base64（76文字改行）
-  const bodyB64 = chunk76(Buffer.from(text, "utf8").toString("base64"));
-
-  const raw =
-    `From: ${fromHeader}\r\n` +
-    `To: ${to}\r\n` +
-    `Subject: ${subjectHeader}\r\n` +
-    `MIME-Version: 1.0\r\n` +
-    `Content-Type: text/plain; charset=UTF-8\r\n` +
-    `Content-Transfer-Encoding: base64\r\n` +
-    `\r\n` +
-    `${bodyB64}\r\n`;
-
-  const res = await gmail.users.messages.send({
-    userId: "me",
-    requestBody: { raw: Buffer.from(raw).toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"") },
+/** プレーンテキスト送信（UTF-8） */
+async function sendMailPlain({ to, subject, text }) {
+  return transporter.sendMail({
+    from: FROM,
+    to,
+    subject,
+    text,
   });
-  return res.data;
 }
+
 // ---------- ヘルスチェック ----------
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
@@ -112,10 +83,10 @@ app.post("/register", async (req, res) => {
       ...(trialMode && { trialStartDate: new Date().toISOString() }),
     });
 
-    // 3) まず応答を返す
+    // 3) 先に応答
     res.status(201).json({ ok: true, uid: userRecord.uid });
 
-    // 4) メール送信（裏側で）
+    // 4) メール送信（非同期）
     sendAdminMail({ email, name, salonName, prefecture, apps, trialMode }).catch(e =>
       console.error("admin mail error:", e)
     );
@@ -146,8 +117,8 @@ async function sendAdminMail({ email, name, salonName, prefecture, apps, trialMo
     `対象アプリ: ${JSON.stringify(apps || ["agent", "timer"])}`,
   ].join("\n");
 
-  await sendViaGmailAPI({
-    to: process.env.ADMIN_MAIL_TO || GMAIL_USER,
+  await sendMailPlain({
+    to: process.env.ADMIN_MAIL_TO || SMTP_USER,
     subject,
     text,
   });
@@ -196,7 +167,7 @@ async function sendUserMail({ email, name, trialMode }) {
         "MELCOCOサポート",
       ];
 
-  await sendViaGmailAPI({
+  await sendMailPlain({
     to: email,
     subject,
     text: lines.join("\n"),
@@ -211,7 +182,7 @@ async function sendVerificationEmail(email) {
   };
   const link = await admin.auth().generateEmailVerificationLink(email, actionCodeSettings);
 
-  await sendViaGmailAPI({
+  await sendMailPlain({
     to: email,
     subject: "【MELCOCO】メールアドレスの確認",
     text: `以下のリンクをクリックしてメール確認を完了してください。\n${link}`,
@@ -219,27 +190,17 @@ async function sendVerificationEmail(email) {
 }
 
 // ---------- デバッグ用エンドポイント ----------
-app.get("/debug/email/verify", async (_req, res) => {
-  try {
-    const token = (await oAuth2Client.getAccessToken()).token;
-    res.json({ ok: true, tokenExists: !!token });
-  } catch (e) {
-    console.error("OAuth verify error:", e);
-    res.status(500).json({ ok: false, error: e.message || String(e) });
-  }
-});
-
 app.get("/debug/email/test", async (req, res) => {
   try {
-    const to = req.query.to || GMAIL_USER;
-    const r = await sendViaGmailAPI({
+    const to = req.query.to || SMTP_USER;
+    const r = await sendMailPlain({
       to,
-      subject: "【テスト】MELCOCO Gmail API送信",
-      text: "このメールが届けば Gmail API 経由で送れています。",
+      subject: "【テスト】MELCOCO SMTP送信",
+      text: "このメールが届けば Gmail SMTP（アプリパスワード）経由で送れています。",
     });
-    res.json({ ok: true, id: r.id, labelIds: r.labelIds });
+    res.json({ ok: true, messageId: r.messageId, accepted: r.accepted });
   } catch (e) {
-    console.error("Gmail API test send error:", e);
+    console.error("SMTP test send error:", e);
     res.status(500).json({ ok: false, error: e.message || String(e) });
   }
 });
