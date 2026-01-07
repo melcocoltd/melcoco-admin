@@ -208,33 +208,65 @@ async function sendAdminMail({ email, name, salonName, prefecture, apps, trialMo
 
 // ---------- 申請者向けメール ----------
 async function sendUserMail({ email, name, trialMode }) {
-  const loginUrl =
-    process.env.LOGIN_URL || "https://melco-hairdesign.com/pwa/login.html";
+  // Android（PWA）ログインURL
+  const androidLoginUrl =
+    process.env.ANDROID_LOGIN_URL || "https://melco-hairdesign.com/pwa/login.html";
+
+  // iPhone（ネイティブ）導線：AppStore / TestFlight / LP など好きなURL
+  // 例）TestFlightの招待URL or App StoreのURL or あなたの案内ページ
+  const iosAppUrl =
+    process.env.IOS_APP_URL || "https://melcoco.jp/irontimer-ios/";
 
   const subject = trialMode
     ? "【MELCOCO】体験版のご案内（7日間）"
     : "【MELCOCO】本会員のご案内";
 
+  const commonHeader = [
+    `${name} 様`,
+    "",
+    trialMode
+      ? "MELCOCOアプリ体験版へのお申し込みありがとうございます。"
+      : "MELCOCOアプリへのお申し込みありがとうございます。",
+    "",
+    "【ご利用方法】",
+    "■ iPhoneの方（ネイティブアプリ）",
+    `こちらからアプリを開いてください：`,
+    iosAppUrl,
+    "",
+    "■ Androidの方（PWA）",
+    "こちらからログインしてご利用ください：",
+    androidLoginUrl,
+    "",
+    "ログインパスワード: melcoco",
+    "",
+  ];
+
+  const trialFooter = [
+    "※体験版のご利用期間は7日間です。",
+    "継続してご利用されたい場合は、有料オンラインサロン「ココナッツ研究室」へご入会ください。",
+    "ご案内: https://melcoco.jp/coconut-lab/",
+    "",
+    "ご不明な点がございましたら、お気軽にお問い合わせください。",
+    "",
+    "MELCOCOサポート",
+  ];
+
+  const activeFooter = [
+    "ご不明な点がございましたら、お気軽にお問い合わせください。",
+    "",
+    "MELCOCOサポート",
+  ];
+
   const lines = trialMode
-    ? [
-        `${name} 様`,
-        "",
-        "MELCOCOアプリ体験版へのお申し込みありがとうございます。",
-        "7日間の無料体験期間中、以下のURLからログインしてご利用いただけます。",
-        "",
-        "ログインURL:",
-        loginUrl,
-        "",
-        "ログインパスワード: melcoco",
-        "",
-        "※体験版のご利用期間は7日間です。",
-        "継続してご利用されたい場合は、有料オンラインサロン「ココナッツ研究室」へご入会ください。",
-        "ご案内: https://melcoco.jp/coconut-lab/",
-        "",
-        "ご不明な点がございましたら、お気軽にお問い合わせください。",
-        "",
-        "MELCOCOサポート",
-      ]
+    ? commonHeader.concat(trialFooter)
+    : commonHeader.concat(activeFooter);
+
+  await sendMailPlain({
+    to: email,
+    subject,
+    text: lines.join("\n"),
+  });
+}
     : [
         `${name} 様`,
         "",
