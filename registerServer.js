@@ -27,151 +27,158 @@ const db = admin.firestore();
 const auth = admin.auth();
 
 // ---------- メール送信（SMTP / Gmailアプリパスワード） ----------
-const SMTP_USER = process.env.SMTP_USER; // 送信元Gmail（必須）
+const SMTP_USER = process.env.SMTP_USER; // 送信元Gmail（例: xxx@gmail.com）
+const SMTP_PASS = process.env.SMTP_PASS; // Googleのアプリパスワード（16桁）
+
 const FROM = process.env.SMTP_FROM || `"MELCOCOサポート" <${SMTP_USER}>`;
+
+if (!SMTP_USER || !SMTP_PASS) {
+  console.warn("⚠️ SMTP_USER / SMTP_PASS が未設定です（メール送信は失敗します）");
+}
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || "smtp.gmail.com",
-  port: Number(process.env.SMTP_PORT || 465),
-  secure: String(process.env.SMTP_SECURE || "true") !== "false",
-  auth: {
-    user: SMTP_USER,
-    pass: process.env.SMTP_PASS, // Gmailのアプリパスワード（16桁）
+  // ✅ Gmailは587推奨（STARTTLS）
+  port: Number(process.env.SMTP_PORT || 587),
+  secure: String(process.env.SMTP_SECURE || "false") === "true", // 587ならfalse推奨
+  auth: { user: SMTP_USER, pass: SMTP_PASS },
+  // 一部環境で必要になることがある（厳格すぎるTLSで詰む時の逃げ）
+  tls: {
+    minVersion: "TLSv1.2",
   },
+  connectionTimeout: Number(process.env.SMTP_CONN_TIMEOUT || 15000),
+  greetingTimeout: Number(process.env.SMTP_GREET_TIMEOUT || 15000),
+  socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT || 20000),
 });
 
 // ✅ SMTP疎通チェック（起動時）
-transporter.verify((err) => {
+transporter.verify((err, success) => {
   if (err) {
-    console.error("❌ SMTP verify failed:", err);
+    console.error("❌ SMTP verify failed:", err?.message || err);
   } else {
-    console.log("✅ SMTP server is ready");
+    console.log("✅ SMTP server is ready:", success);
   }
 });
 
 /** プレーンテキスト送信（UTF-8） */
 async function sendMailPlain({ to, subject, text }) {
-  return transporter.sendMail({
-    from: FROM,
-    to,
-    subject,
-    text,
-  });
+  return transporter.sendMail({ from: FROM, to, subject, text });
 }
 
 // ---------- ヘルスチェック ----------
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-// ---------- util ----------
-function yyyyMmDdNowUTC() {
-  return new Date().toISOString().slice(0, 10); // yyyy-mm-dd
-}
+/**
+ * apps を Firestore に保存する形を正規化する
+ * - 配列 ["agent","timer"] が来てもOK（旧互換）
+ * - オブジェクト {agent:{...}, irontimer:{...}} が来てもOK（新方式）
+ */
+function normalizeApps(apps, { trialMode }) {
+  const today = new Date().toISOString().slice(0, 10);
 
-function normalizeApps(apps) {
-  // フォームから apps が
-  // 1) { agent:{...}, irontimer:{...}, androidtimer:{...} } の「オブジェクト」
-  // 2) ["agent","timer"] の「配列」
-  // どっちでも来る可能性があるので両対応で正規化する
+  // 新方式：object
   if (apps && typeof apps === "object" && !Array.isArray(apps)) {
-    return apps; // objectのまま採用
-  }
-  if (Array.isArray(apps)) {
-    // 旧形式なら最低限の形にする
-    const o = {};
-    for (const k of apps) o[k] = {};
-    return o;
-  }
-  // 未指定ならデフォ
-  return {
-    agent: { loginCount: 0 },
-    irontimer: { deviceId: "", switchCount: 0, trialStartDate: yyyyMmDdNowUTC() },
-    androidtimer: { deviceId: "", switchCount: 0, trialStartDate: yyyyMmDdNowUTC() },
-  };
-}
+    // trialStartDate が無ければ入れておく（安全）
+    const out = { ...apps };
 
-function pickTrialStartDate(appsObj) {
-  // apps.irontimer.trialStartDate or apps.androidtimer.trialStartDate があればそれ優先
-  // なければ today
-  const cand =
-    appsObj?.irontimer?.trialStartDate ||
-    appsObj?.androidtimer?.trialStartDate ||
-    appsObj?.timer?.trialStartDate ||
-    appsObj?.android?.trialStartDate ||
-    "";
-  return cand || yyyyMmDdNowUTC();
+    for (const k of Object.keys(out)) {
+      if (out[k] && typeof out[k] === "object") {
+        if (trialMode) {
+          out[k].trialStartDate = out[k].trialStartDate || today;
+        }
+        // switchCount/loginCountが無ければ0
+        if (out[k].switchCount === undefined) out[k].switchCount = 0;
+        if (out[k].loginCount === undefined) out[k].loginCount = 0;
+        if (out[k].deviceId === undefined) out[k].deviceId = "";
+      }
+    }
+    return out;
+  }
+
+  // 旧方式：array
+  const arr = Array.isArray(apps) ? apps : ["agent", "timer"];
+  const out = {};
+  for (const key of arr) {
+    out[key] = { loginCount: 0 };
+  }
+
+  // 旧timerを新keyに寄せたいならここで変換も可
+  // out["androidtimer"] = out["timer"]; delete out["timer"];
+
+  if (trialMode) {
+    // trial向けに iOS/Android timer 用の箱も用意（必要なら）
+    out["irontimer"] = out["irontimer"] || {
+      deviceId: "",
+      switchCount: 0,
+      trialStartDate: today,
+    };
+    out["androidtimer"] = out["androidtimer"] || {
+      deviceId: "",
+      switchCount: 0,
+      trialStartDate: today,
+    };
+  }
+  return out;
 }
 
 // ---------- 申請受付（体験版 / 本会員） ----------
 app.post("/register", async (req, res) => {
   const { email, name, salonName, prefecture, apps, status } = req.body || {};
-
   if (!email || !salonName || !prefecture || !name || !status) {
     return res.status(400).json({ ok: false, error: "必要な情報が不足しています。" });
   }
 
   const defaultPassword = "melcoco";
-  const trialMode = String(status).toLowerCase() === "trial";
-
-  // apps 正規化
-  const appsObj = normalizeApps(apps);
-  const trialStartDate = pickTrialStartDate(appsObj);
+  const trialMode = status === "trial";
 
   try {
-    // 1) Firebase Auth 作成
-    const userRecord = await auth.createUser({
-      email,
-      password: defaultPassword,
-      displayName: name,
-    });
-
-    // 2) Firestore 保存（users/{uid}）
-    // ✅ ここが重要：apps は「object」として保存（Swiftもこの形を読む）
-    const docData = {
-      status,                 // "trial" or "active"
-      email,
-      displayName: name,
-      salonName,
-      prefecture,
-      apps: appsObj,          // object形式
-    };
-
-    // trial のときは trialStartDate をトップにも置く（保険）
-    if (trialMode) {
-      docData.trialStartDate = trialStartDate; // yyyy-mm-dd
-      // apps側に trialStartDate が無いキーがあれば入れておく（保険）
-      if (docData.apps.irontimer && !docData.apps.irontimer.trialStartDate) {
-        docData.apps.irontimer.trialStartDate = trialStartDate;
-      }
-      if (docData.apps.androidtimer && !docData.apps.androidtimer.trialStartDate) {
-        docData.apps.androidtimer.trialStartDate = trialStartDate;
+    // 1) Firebase Auth 作成（既に存在する場合の対応も入れる）
+    let userRecord;
+    try {
+      userRecord = await auth.createUser({
+        email,
+        password: defaultPassword,
+        displayName: name,
+      });
+    } catch (e) {
+      // 既に同じメールがある場合はそのユーザーを取得して上書き更新
+      if (e?.code === "auth/email-already-exists") {
+        userRecord = await auth.getUserByEmail(email);
+        await auth.updateUser(userRecord.uid, { displayName: name });
+      } else {
+        throw e;
       }
     }
 
-    await db.collection("users").doc(userRecord.uid).set(docData, { merge: true });
+    // 2) Firestore 保存（appsはオブジェクトで保存）
+    const appsObj = normalizeApps(apps, { trialMode });
 
-    // 3) 先に応答（フォーム側はここで成功表示になる）
+    await db.collection("users").doc(userRecord.uid).set(
+      {
+        status,
+        email,
+        displayName: name,
+        salonName,
+        prefecture,
+        apps: appsObj,
+      },
+      { merge: true }
+    );
+
+    // 3) 先に応答（フォーム側は成功扱い）
     res.status(201).json({ ok: true, uid: userRecord.uid });
 
     // 4) メール送信（非同期）
-    sendAdminMail({
-      email,
-      name,
-      salonName,
-      prefecture,
-      appsObj,
-      trialMode,
-      uid: userRecord.uid,
-    }).catch((e) => console.error("admin mail error:", e));
-
-    sendUserMail({
-      email,
-      name,
-      trialMode,
-    }).catch((e) => console.error("user mail error:", e));
+    sendAdminMail({ email, name, salonName, prefecture, apps: appsObj, trialMode }).catch((e) =>
+      console.error("admin mail error:", e?.message || e)
+    );
+    sendUserMail({ email, name, trialMode }).catch((e) =>
+      console.error("user mail error:", e?.message || e)
+    );
 
     if (process.env.SEND_VERIFY_LINK === "true") {
       sendVerificationEmail(email).catch((e) =>
-        console.error("verify mail error:", e)
+        console.error("verify mail error:", e?.message || e)
       );
     }
   } catch (e) {
@@ -181,16 +188,15 @@ app.post("/register", async (req, res) => {
 });
 
 // ---------- 管理者通知 ----------
-async function sendAdminMail({ email, name, salonName, prefecture, appsObj, trialMode, uid }) {
+async function sendAdminMail({ email, name, salonName, prefecture, apps, trialMode }) {
   const subject = `【MELCOCO】${trialMode ? "体験版" : "本会員"}アプリ申請が届きました`;
   const text = [
     "【申請内容】",
-    `UID: ${uid}`,
     `サロン名: ${salonName}`,
     `都道府県: ${prefecture}`,
     `氏名: ${name}`,
     `メール: ${email}`,
-    `apps: ${JSON.stringify(appsObj)}`,
+    `対象アプリ: ${JSON.stringify(apps || {}, null, 2)}`,
   ].join("\n");
 
   await sendMailPlain({
@@ -244,11 +250,7 @@ async function sendUserMail({ email, name, trialMode }) {
         "MELCOCOサポート",
       ];
 
-  await sendMailPlain({
-    to: email,
-    subject,
-    text: lines.join("\n"),
-  });
+  await sendMailPlain({ to: email, subject, text: lines.join("\n") });
 }
 
 // ---------- Firebase メール確認リンク（任意） ----------
@@ -275,12 +277,12 @@ app.get("/debug/email/test", async (req, res) => {
     const r = await sendMailPlain({
       to,
       subject: "【テスト】MELCOCO SMTP送信",
-      text: "このメールが届けば Gmail SMTP（アプリパスワード）経由で送れています。",
+      text: "このメールが届けば SMTP は通っています。",
     });
     res.json({ ok: true, messageId: r.messageId, accepted: r.accepted });
   } catch (e) {
     console.error("SMTP test send error:", e);
-    res.status(500).json({ ok: false, error: e.message || String(e) });
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });
 
