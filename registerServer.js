@@ -8,6 +8,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// （任意）落ちた理由をログに残す
+process.on("unhandledRejection", (reason) => {
+  console.error("❌ unhandledRejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("❌ uncaughtException:", err);
+  process.exit(1);
+});
+
 // ---------- Firebase秘密鍵（base64）読み込み ----------
 let serviceAccount;
 try {
@@ -38,14 +47,14 @@ const FROM = process.env.SMTP_FROM || `"MELCOCOサポート" <${SMTP_USER}>`;
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || "smtp.gmail.com",
   port: Number(process.env.SMTP_PORT || 465),
-  secure: String(process.env.SMTP_SECURE || "true") !== "false", // "true"ならtrue
+  secure: String(process.env.SMTP_SECURE || "true") !== "false",
   auth: {
     user: SMTP_USER,
-    pass: process.env.SMTP_PASS, // Googleのアプリパスワード（16桁）
+    pass: process.env.SMTP_PASS,
   },
 });
 
-// ✅ SMTP疎通チェック（起動時）※ createTransport の「外」に置く
+// ✅ SMTP疎通チェック（起動時）
 transporter.verify((err, success) => {
   if (err) {
     console.error("❌ SMTP verify failed:", err);
@@ -79,74 +88,61 @@ app.post("/register", async (req, res) => {
   const defaultPassword = "melcoco";
   const trialMode = status === "trial";
 
- // ---------- apps 初期値 ----------
-const defaultAppsObj = {
-  "i-agant": {
-    loginCount: 0,
-    switchCount: 0,
-    trialStartDate: todayYMD(),
-    deviceId: "",
-  },
-  "i-timer": {
-    loginCount: 0,
-    switchCount: 0,
-    trialStartDate: todayYMD(),
-    deviceId: "",
-  },
+  // ---------- apps 初期値 ----------
+  const defaultAppsObj = {
+    // iOS ネイティブ
+    "i-agant": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
+    "i-timer": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
 
-  // PWA / Android（残すなら）
-  agent: {
-    loginCount: 0,
-    switchCount: 0,
-    trialStartDate: todayYMD(),
-    deviceId: "",
-  },
-  androidtimer: {
-    loginCount: 0,
-    switchCount: 0,
-    trialStartDate: todayYMD(),
-    deviceId: "",
-  },
-};
+    // PWA / Android（残すなら）
+    agent: { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
+    androidtimer: { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
+  };
 
-// ---------- apps 正規化 ----------
-const normalized =
-  apps && typeof apps === "object" && !Array.isArray(apps)
-    ? Object.fromEntries(Object.entries(apps).map(([k, v]) => [k, v || {}]))
-    : Array.isArray(apps)
-    ? apps.reduce((acc, k) => {
-        acc[k] = {};
-        return acc;
-      }, {})
-    : {};
+  // ---------- apps 正規化 ----------
+  // 受け取りの apps が
+  // - オブジェクト: { "i-timer": {...}, ... }
+  // - 配列: ["i-timer", "agent"]
+  // どっちでもOKにする
+  const normalized =
+    apps && typeof apps === "object" && !Array.isArray(apps)
+      ? Object.fromEntries(Object.entries(apps).map(([k, v]) => [k, v || {}]))
+      : Array.isArray(apps)
+      ? apps.reduce((acc, k) => {
+          acc[k] = {};
+          return acc;
+        }, {})
+      : {};
 
-// ---------- apps 深いマージ（重要） ----------
-const appsToSave = Object.fromEntries(
-  Object.entries({ ...defaultAppsObj, ...normalized }).map(([key, value]) => [
-    key,
-    {
-      ...(defaultAppsObj[key] || {}),
-      ...(value || {}),
-    },
-  ])
-);
-  
-  let userRecord;
-try {
-  userRecord = await auth.createUser({
-    email,
-    password: defaultPassword,
-    displayName: name,
-  });
-} catch (e) {
-  if (e.code === "auth/email-already-exists") {
-    userRecord = await auth.getUserByEmail(email);
-  } else {
-    throw e;
-  }
-}
+  // ---------- apps 深いマージ（重要） ----------
+  const appsToSave = Object.fromEntries(
+    Object.entries({ ...defaultAppsObj, ...normalized }).map(([key, value]) => [
+      key,
+      {
+        ...(defaultAppsObj[key] || {}),
+        ...(value || {}),
+      },
+    ])
+  );
 
-    // 2) Firestore 保存
+  try {
+    // 1) Firebase Auth 作成（既存なら取得）
+    let userRecord;
+    try {
+      userRecord = await auth.createUser({
+        email,
+        password: defaultPassword,
+        displayName: name,
+      });
+    } catch (e) {
+      if (e?.code === "auth/email-already-exists") {
+        userRecord = await auth.getUserByEmail(email);
+      } else {
+        throw e;
+      }
+    }
+
+    // 2) Firestore 保存（上書き）
     await db.collection("users").doc(userRecord.uid).set({
       status,
       email,
@@ -207,7 +203,6 @@ async function sendUserMail({ email, name, trialMode }) {
   const ANDROID_LOGIN_URL =
     process.env.ANDROID_LOGIN_URL || "https://melco-hairdesign.com/pwa/login.html";
 
-  // iPhone向け：ネイティブアプリ案内ページ（TestFlight/AppStore/導線ページどれでもOK）
   const IOS_APP_URL =
     process.env.IOS_APP_URL || "https://melcoco.jp/irontimer-ios/";
 
@@ -215,6 +210,7 @@ async function sendUserMail({ email, name, trialMode }) {
     ? "【MELCOCO】体験版のご案内（7日間）"
     : "【MELCOCO】本会員のご案内";
 
+  // ※ここに「謎の全角空白」を入れると Render で即死することがあるので絶対入れない
   const lines = trialMode
     ? [
         `${name} 様`,
@@ -225,7 +221,7 @@ async function sendUserMail({ email, name, trialMode }) {
         "【iPhoneの方】（アイロンタイマー）",
         IOS_APP_URL,
         "",
-　　　　　"【Androidの方】（PWAでログイン）",
+        "【Androidの方】（PWAでログイン）",
         ANDROID_LOGIN_URL,
         "",
         "ログインパスワード: melcoco",
@@ -269,6 +265,7 @@ async function sendVerificationEmail(email) {
     url: process.env.ACTION_URL || "https://melco-hairdesign.com/pwa/login.html",
     handleCodeInApp: true,
   };
+
   const link = await admin
     .auth()
     .generateEmailVerificationLink(email, actionCodeSettings);
