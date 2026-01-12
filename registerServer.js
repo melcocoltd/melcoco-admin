@@ -79,31 +79,72 @@ app.post("/register", async (req, res) => {
   const defaultPassword = "melcoco";
   const trialMode = status === "trial";
 
-  // ✅ apps の受け取りを「配列でもオブジェクトでもOK」にする
-  // 推奨：オブジェクト（agent/irontimer/androidtimer）
-  const defaultAppsObj = {
-    agent: { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
-    irontimer: { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
-    androidtimer: { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
-  };
+ // ---------- apps 初期値 ----------
+const defaultAppsObj = {
+  "i-agant": {
+    loginCount: 0,
+    switchCount: 0,
+    trialStartDate: todayYMD(),
+    deviceId: "",
+  },
+  "i-timer": {
+    loginCount: 0,
+    switchCount: 0,
+    trialStartDate: todayYMD(),
+    deviceId: "",
+  },
 
-  const appsToSave =
-    apps && typeof apps === "object" && !Array.isArray(apps)
-      ? apps
-      : Array.isArray(apps)
-      ? apps.reduce((acc, k) => {
-          acc[k] = { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" };
-          return acc;
-        }, {})
-      : defaultAppsObj;
+  // PWA / Android（残すなら）
+  agent: {
+    loginCount: 0,
+    switchCount: 0,
+    trialStartDate: todayYMD(),
+    deviceId: "",
+  },
+  androidtimer: {
+    loginCount: 0,
+    switchCount: 0,
+    trialStartDate: todayYMD(),
+    deviceId: "",
+  },
+};
 
-  try {
-    // 1) Firebase Auth 作成（すでに存在したらエラーになるので注意）
-    const userRecord = await auth.createUser({
-      email,
-      password: defaultPassword,
-      displayName: name,
-    });
+// ---------- apps 正規化 ----------
+const normalized =
+  apps && typeof apps === "object" && !Array.isArray(apps)
+    ? Object.fromEntries(Object.entries(apps).map(([k, v]) => [k, v || {}]))
+    : Array.isArray(apps)
+    ? apps.reduce((acc, k) => {
+        acc[k] = {};
+        return acc;
+      }, {})
+    : {};
+
+// ---------- apps 深いマージ（重要） ----------
+const appsToSave = Object.fromEntries(
+  Object.entries({ ...defaultAppsObj, ...normalized }).map(([key, value]) => [
+    key,
+    {
+      ...(defaultAppsObj[key] || {}),
+      ...(value || {}),
+    },
+  ])
+);
+  
+  let userRecord;
+try {
+  userRecord = await auth.createUser({
+    email,
+    password: defaultPassword,
+    displayName: name,
+  });
+} catch (e) {
+  if (e.code === "auth/email-already-exists") {
+    userRecord = await auth.getUserByEmail(email);
+  } else {
+    throw e;
+  }
+}
 
     // 2) Firestore 保存
     await db.collection("users").doc(userRecord.uid).set({
