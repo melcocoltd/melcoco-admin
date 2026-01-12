@@ -91,7 +91,7 @@ app.post("/register", async (req, res) => {
   // ---------- apps 初期値 ----------
   const defaultAppsObj = {
     // iOS ネイティブ
-    "i-agant": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
+    "i-agent": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
     "i-timer": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
 
     // PWA / Android（残すなら）
