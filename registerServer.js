@@ -90,14 +90,30 @@ app.post("/register", async (req, res) => {
 
   // ---------- apps 初期値 ----------
   const defaultAppsObj = {
-    // iOS ネイティブ
-    "i-agent": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
-    "i-timer": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
+  // iOS
+  "i-agent": {
+    switchCount: 0,
+    trialStartDate: todayYMD(),
+    deviceId: "",
+  },
+  "i-timer": {
+    switchCount: 0,
+    trialStartDate: todayYMD(),
+    deviceId: "",
+  },
 
-    // PWA / Android（残すなら）
-    agent: { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
-    androidtimer: { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
-  };
+  // PWA
+  "a-agent": {
+    switchCount: 0,
+    trialStartDate: todayYMD(),
+    deviceId: "",
+  },
+  "a-timer": {
+    switchCount: 0,
+    trialStartDate: todayYMD(),
+    deviceId: "",
+  },
+};
 
   // ---------- apps 正規化 ----------
   // 受け取りの apps が
