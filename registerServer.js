@@ -83,8 +83,6 @@ const defaultAppsObj = {
   "a-agent": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
   "a-timer": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
 
-  agent: { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
-  androidtimer: { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
 };
 
 // ---------- apps 正規化 ----------
