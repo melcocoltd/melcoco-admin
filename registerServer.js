@@ -8,7 +8,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// （任意）落ちた理由をログに残す
+// ---------- プロセス例外ログ ----------
 process.on("unhandledRejection", (reason) => {
   console.error("❌ unhandledRejection:", reason);
 });
@@ -17,7 +17,7 @@ process.on("uncaughtException", (err) => {
   process.exit(1);
 });
 
-// ---------- Firebase秘密鍵（base64）読み込み ----------
+// ---------- Firebase秘密鍵（base64） ----------
 let serviceAccount;
 try {
   const b64 = process.env.FIREBASE_KEY_BASE64;
@@ -35,8 +35,8 @@ admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 const auth = admin.auth();
 
-// ---------- メール送信（SMTP / Gmailアプリパスワード） ----------
-const SMTP_USER = process.env.SMTP_USER; // 送信元Gmail
+// ---------- SMTP ----------
+const SMTP_USER = process.env.SMTP_USER;
 if (!SMTP_USER) {
   console.error("❌ SMTP_USER is undefined");
   process.exit(1);
@@ -54,95 +54,78 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// ✅ SMTP疎通チェック（起動時）
 transporter.verify((err, success) => {
-  if (err) {
-    console.error("❌ SMTP verify failed:", err);
-  } else {
-    console.log("✅ SMTP server is ready:", success);
-  }
+  if (err) console.error("❌ SMTP verify failed:", err);
+  else console.log("✅ SMTP server is ready:", success);
 });
 
-/** プレーンテキスト送信（UTF-8） */
 async function sendMailPlain({ to, subject, text }) {
-  return transporter.sendMail({
-    from: FROM,
-    to,
-    subject,
-    text,
-  });
+  return transporter.sendMail({ from: FROM, to, subject, text });
 }
 
-// ---------- ヘルスチェック ----------
+// ---------- Utils ----------
+function todayYMD() {
+  return new Date().toISOString().slice(0, 10);
+}
+function prettyJSON(obj) {
+  try {
+    return JSON.stringify(obj, null, 2);
+  } catch {
+    return String(obj);
+  }
+}
+
+// ---------- apps 初期値 ----------
+const defaultAppsObj = {
+  "i-agent": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
+  "i-timer": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
+
+  "a-agent": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
+  "a-timer": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
+
+  agent: { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
+  androidtimer: { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
+};
+
+// ---------- apps 正規化 ----------
+function normalizeApps(apps) {
+  const base =
+    apps && typeof apps === "object" && !Array.isArray(apps) ? apps : {};
+
+  const merged = { ...defaultAppsObj, ...base };
+
+  for (const key of Object.keys(merged)) {
+    merged[key] = {
+      ...defaultAppsObj[key],
+      ...(merged[key] || {}),
+    };
+
+    if (!merged[key].trialStartDate) merged[key].trialStartDate = todayYMD();
+    if (typeof merged[key].loginCount !== "number") merged[key].loginCount = 0;
+    if (typeof merged[key].switchCount !== "number") merged[key].switchCount = 0;
+    if (typeof merged[key].deviceId !== "string") merged[key].deviceId = "";
+  }
+
+  return merged;
+}
+
+// ---------- ヘルス ----------
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-// ---------- 申請受付（体験版 / 本会員） ----------
+// ---------- 登録 ----------
 app.post("/register", async (req, res) => {
   const { email, name, salonName, prefecture, apps, status } = req.body || {};
+
   if (!email || !salonName || !prefecture || !name || !status) {
-    return res
-      .status(400)
-      .json({ ok: false, error: "必要な情報が不足しています。" });
+    return res.status(400).json({ ok: false, error: "必要な情報が不足しています。" });
   }
 
   const defaultPassword = "melcoco";
   const trialMode = status === "trial";
 
-  // ---------- apps 初期値 ----------
-  const defaultAppsObj = {
-  // iOS
-  "i-agent": {
-    switchCount: 0,
-    trialStartDate: todayYMD(),
-    deviceId: "",
-  },
-  "i-timer": {
-    switchCount: 0,
-    trialStartDate: todayYMD(),
-    deviceId: "",
-  },
-
-  // PWA
-  "a-agent": {
-    switchCount: 0,
-    trialStartDate: todayYMD(),
-    deviceId: "",
-  },
-  "a-timer": {
-    switchCount: 0,
-    trialStartDate: todayYMD(),
-    deviceId: "",
-  },
-};
-
-  // ---------- apps 正規化 ----------
-  // 受け取りの apps が
-  // - オブジェクト: { "i-timer": {...}, ... }
-  // - 配列: ["i-timer", "agent"]
-  // どっちでもOKにする
-  const normalized =
-    apps && typeof apps === "object" && !Array.isArray(apps)
-      ? Object.fromEntries(Object.entries(apps).map(([k, v]) => [k, v || {}]))
-      : Array.isArray(apps)
-      ? apps.reduce((acc, k) => {
-          acc[k] = {};
-          return acc;
-        }, {})
-      : {};
-
-  // ---------- apps 深いマージ（重要） ----------
-  const appsToSave = Object.fromEntries(
-    Object.entries({ ...defaultAppsObj, ...normalized }).map(([key, value]) => [
-      key,
-      {
-        ...(defaultAppsObj[key] || {}),
-        ...(value || {}),
-      },
-    ])
-  );
+  const appsToSave = normalizeApps(apps);
 
   try {
-    // 1) Firebase Auth 作成（既存なら取得）
     let userRecord;
     try {
       userRecord = await auth.createUser({
@@ -158,7 +141,6 @@ app.post("/register", async (req, res) => {
       }
     }
 
-    // 2) Firestore 保存（上書き）
     await db.collection("users").doc(userRecord.uid).set({
       status,
       email,
@@ -170,33 +152,19 @@ app.post("/register", async (req, res) => {
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // 3) 先に応答
     res.status(201).json({ ok: true, uid: userRecord.uid });
 
-    // 4) メール送信（非同期）
-    sendAdminMail({ email, name, salonName, prefecture, apps: appsToSave, trialMode }).catch((e) =>
-      console.error("admin mail error:", e)
-    );
-    sendUserMail({ email, name, trialMode }).catch((e) =>
-      console.error("user mail error:", e)
-    );
-
-    if (process.env.SEND_VERIFY_LINK === "true") {
-      sendVerificationEmail(email).catch((e) =>
-        console.error("verify mail error:", e)
-      );
-    }
+    sendAdminMail({ email, name, salonName, prefecture, apps: appsToSave, trialMode }).catch(console.error);
+    sendUserMail({ email, name, trialMode }).catch(console.error);
   } catch (e) {
     console.error("register error:", e);
-    return res
-      .status(500)
-      .json({ ok: false, error: e?.message || "server error" });
+    res.status(500).json({ ok: false, error: e?.message || "server error" });
   }
 });
 
-// ---------- 管理者通知 ----------
+// ---------- 管理者メール ----------
 async function sendAdminMail({ email, name, salonName, prefecture, apps, trialMode }) {
-  const subject = `【MELCOCO】${trialMode ? "体験版" : "本会員"}アプリ申請が届きました`;
+  const subject = `【MELCOCO】${trialMode ? "体験版" : "本会員"}アプリ申請`;
 
   const text = [
     "【申請内容】",
@@ -214,60 +182,58 @@ async function sendAdminMail({ email, name, salonName, prefecture, apps, trialMo
   });
 }
 
-// ---------- 申請者向けメール（iOS / Android 両方のURLを載せる） ----------
+// ---------- ユーザー通知 ----------
 async function sendUserMail({ email, name, trialMode }) {
   const ANDROID_LOGIN_URL =
     process.env.ANDROID_LOGIN_URL || "https://melco-hairdesign.com/pwa/login.html";
 
-  const IOS_APP_URL =
-    process.env.IOS_APP_URL || "https://melcoco.jp/irontimer-ios/";
+  const IOS_TIMER_URL =
+  process.env.IOS_TIMER_URL || "https://apps.apple.com/app/irontimernative/id6757497537";
+
+const IOS_AGENT_URL =
+  process.env.IOS_AGENT_URL || "https://melco-hairdesign.com/pwa/login.html";
 
   const subject = trialMode
     ? "【MELCOCO】体験版のご案内（7日間）"
     : "【MELCOCO】本会員のご案内";
 
-  // ※ここに「謎の全角空白」を入れると Render で即死することがあるので絶対入れない
   const lines = trialMode
-    ? [
-        `${name} 様`,
-        "",
-        "MELCOCOアプリ体験版へのお申し込みありがとうございます。",
-        "7日間の無料体験期間中、以下の案内に沿ってご利用ください。",
-        "",
-        "【iPhoneの方】（アイロンタイマー）",
-        IOS_APP_URL,
-        "",
-        "【Androidの方】（PWAでログイン）",
-        ANDROID_LOGIN_URL,
-        "",
-        "ログインパスワード: melcoco",
-        "",
-        "※体験版のご利用期間は7日間です。",
-        "継続してご利用されたい場合は、有料オンラインサロン「ココナッツ研究室」へご入会ください。",
-        "ご案内: https://melcoco.jp/coconut-lab/",
-        "",
-        "ご不明な点がございましたら、お気軽にお問い合わせください。",
-        "",
-        "MELCOCOサポート",
-      ]
-    : [
-        `${name} 様`,
-        "",
-        "MELCOCOアプリへのお申し込みありがとうございます。",
-        "",
-        "【iPhoneの方】（ネイティブアプリ）",
-        IOS_APP_URL,
-        "",
-        "【Androidの方】（PWAでログイン）",
-        ANDROID_LOGIN_URL,
-        "",
-        "ログインパスワード: melcoco",
-        "",
-        "ご不明な点がございましたら、お気軽にお問い合わせください。",
-        "",
-        "MELCOCOサポート",
-      ];
-
+  ? [
+      `${name} 様`,
+      "",
+      "MELCOCO体験版のご案内です。",
+      "",
+      "【iPhone用アイロンタイマー】",
+      IOS_TIMER_URL,
+      "",
+      "【iPhone用薬剤選定アプリ】",
+      IOS_AGENT_URL,
+      "",
+      "【Android】",
+      ANDROID_LOGIN_URL,
+      "",
+      "ログインパスワード: melcoco",
+      "",
+      "MELCOCOサポート",
+    ]
+  : [
+      `${name} 様`,
+      "",
+      "MELCOCO本会員アプリのご案内です。",
+      "",
+      "【iPhone用アイロンタイマー】",
+      IOS_TIMER_URL,
+      "",
+      "【iPhone用薬剤選定アプリ】",
+      IOS_AGENT_URL,
+      "",
+      "【Android】",
+      ANDROID_LOGIN_URL,
+      "",
+      "ログインパスワード: melcoco",
+      "",
+      "MELCOCOサポート",
+    ];
   await sendMailPlain({
     to: email,
     subject,
@@ -275,52 +241,6 @@ async function sendUserMail({ email, name, trialMode }) {
   });
 }
 
-// ---------- Firebase メール確認リンク（任意） ----------
-async function sendVerificationEmail(email) {
-  const actionCodeSettings = {
-    url: process.env.ACTION_URL || "https://melco-hairdesign.com/pwa/login.html",
-    handleCodeInApp: true,
-  };
-
-  const link = await admin
-    .auth()
-    .generateEmailVerificationLink(email, actionCodeSettings);
-
-  await sendMailPlain({
-    to: email,
-    subject: "【MELCOCO】メールアドレスの確認",
-    text: `以下のリンクをクリックしてメール確認を完了してください。\n${link}`,
-  });
-}
-
-// ---------- デバッグ用エンドポイント ----------
-app.get("/debug/email/test", async (req, res) => {
-  try {
-    const to = req.query.to || SMTP_USER;
-    const r = await sendMailPlain({
-      to,
-      subject: "【テスト】MELCOCO SMTP送信",
-      text: "このメールが届けば SMTP 送信はOKです。",
-    });
-    res.json({ ok: true, messageId: r.messageId, accepted: r.accepted });
-  } catch (e) {
-    console.error("SMTP test send error:", e);
-    res.status(500).json({ ok: false, error: e.message || String(e) });
-  }
-});
-
-// ---------- Utils ----------
-function todayYMD() {
-  return new Date().toISOString().slice(0, 10);
-}
-function prettyJSON(obj) {
-  try {
-    return JSON.stringify(obj, null, 2);
-  } catch {
-    return String(obj);
-  }
-}
-
-// ---------- Render必須: PORTでlisten ----------
+// ---------- ポート ----------
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
