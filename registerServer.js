@@ -182,15 +182,16 @@ async function sendAdminMail({ email, name, salonName, prefecture, apps, trialMo
 
 // ---------- ユーザー通知 ----------
 async function sendUserMail({ email, name, trialMode }) {
-  const ANDROID_LOGIN_URL =
-    process.env.ANDROID_LOGIN_URL || "https://melco-hairdesign.com/pwa/login.html";
+  const IOS_AGENT_URL =
+  process.env.IOS_AGENT_URL || "https://apps.apple.com/us/app/agentselectnative/id6757728872";
 
   const IOS_TIMER_URL =
   process.env.IOS_TIMER_URL || "https://apps.apple.com/app/irontimernative/id6757497537";
+  
+  const ANDROID_LOGIN_URL =
+    process.env.ANDROID_LOGIN_URL || "https://melco-hairdesign.com/pwa/login.html";
 
-const IOS_AGENT_URL =
-  process.env.IOS_AGENT_URL || "https://melco-hairdesign.com/pwa/login.html";
-
+  
   const subject = trialMode
     ? "【MELCOCO】体験版のご案内（7日間）"
     : "【MELCOCO】本会員のご案内";
