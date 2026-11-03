@@ -75,36 +75,34 @@ function prettyJSON(obj) {
   }
 }
 
-// ---------- apps 初期値 ----------
-const defaultAppsObj = {
-  "i-agent": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
-  "i-timer": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
+// ---------- apps ----------
+// i- = iPhone / a- = Android
+const APP_KEYS = ["i-agent", "i-timer", "i-color", "a-agent", "a-timer", "a-color"];
 
-  "a-agent": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
-  "a-timer": { loginCount: 0, switchCount: 0, trialStartDate: todayYMD(), deviceId: "" },
-
-};
+// 体験版のトライアル日数（フォームから trialDays が来なかったとき）
+const DEFAULT_TRIAL_DAYS = 7;
 
 // ---------- apps 正規化 ----------
-function normalizeApps(apps) {
+// ・本会員（active）は trialStartDate を入れない（トライアル判定をしないため）
+// ・体験版（trial）は trialStartDate が無ければ今日を入れる
+function normalizeApps(apps, trialMode) {
   const base =
     apps && typeof apps === "object" && !Array.isArray(apps) ? apps : {};
 
-  const merged = { ...defaultAppsObj, ...base };
+  const result = {};
+  const keys = Array.from(new Set([...APP_KEYS, ...Object.keys(base)]));
 
-  for (const key of Object.keys(merged)) {
-    merged[key] = {
-      ...defaultAppsObj[key],
-      ...(merged[key] || {}),
+  for (const key of keys) {
+    const a = base[key] && typeof base[key] === "object" ? base[key] : {};
+    const out = {
+      deviceId: typeof a.deviceId === "string" ? a.deviceId : "",
+      loginCount: typeof a.loginCount === "number" ? a.loginCount : 0,
+      switchCount: typeof a.switchCount === "number" ? a.switchCount : 0,
     };
-
-    if (!merged[key].trialStartDate) merged[key].trialStartDate = todayYMD();
-    if (typeof merged[key].loginCount !== "number") merged[key].loginCount = 0;
-    if (typeof merged[key].switchCount !== "number") merged[key].switchCount = 0;
-    if (typeof merged[key].deviceId !== "string") merged[key].deviceId = "";
+    if (trialMode) out.trialStartDate = a.trialStartDate || todayYMD();
+    result[key] = out;
   }
-
-  return merged;
+  return result;
 }
 
 // ---------- ヘルス ----------
@@ -112,7 +110,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 // ---------- 登録 ----------
 app.post("/register", async (req, res) => {
-  const { email, name, salonName, prefecture, apps, status } = req.body || {};
+  const { email, name, salonName, prefecture, apps, status, trialDays } = req.body || {};
 
   if (!email || !salonName || !prefecture || !name || !status) {
     return res.status(400).json({ ok: false, error: "必要な情報が不足しています。" });
@@ -121,7 +119,8 @@ app.post("/register", async (req, res) => {
   const defaultPassword = "melcoco";
   const trialMode = status === "trial";
 
-  const appsToSave = normalizeApps(apps);
+  const appsToSave = normalizeApps(apps, trialMode);
+  const days = Number(trialDays) > 0 ? Math.floor(Number(trialDays)) : DEFAULT_TRIAL_DAYS;
 
   try {
     let userRecord;
@@ -139,21 +138,49 @@ app.post("/register", async (req, res) => {
       }
     }
 
-    await db.collection("users").doc(userRecord.uid).set({
-      status,
-      email,
-      displayName: name,
-      salonName,
-      prefecture,
-      apps: appsToSave,
-      ...(trialMode && { trialStartDate: new Date().toISOString() }),
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    const userDoc = db.collection("users").doc(userRecord.uid);
+    const snap = await userDoc.get();
+
+    if (!snap.exists) {
+      // ---- 新規 ----
+      await userDoc.set({
+        status,
+        email,
+        displayName: name,
+        salonName,
+        prefecture,
+        apps: appsToSave,
+        ...(trialMode && { trialStartDate: new Date().toISOString(), trialDays: days }),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } else {
+      // ---- 既に登録あり（体験版→本会員など）----
+      // 端末ID・ログイン回数などは消さずに、足りないアプリだけ追加する
+      const current = snap.data() || {};
+      const currentApps = current.apps || {};
+      const mergedApps = { ...currentApps };
+      for (const [key, value] of Object.entries(appsToSave)) {
+        if (!mergedApps[key]) mergedApps[key] = value;
+      }
+      await userDoc.set(
+        {
+          status,
+          email,
+          displayName: name,
+          salonName,
+          prefecture,
+          apps: mergedApps,
+          ...(trialMode ? { trialDays: days } : {}),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
 
     res.status(201).json({ ok: true, uid: userRecord.uid });
 
     sendAdminMail({ email, name, salonName, prefecture, apps: appsToSave, trialMode }).catch(console.error);
-    sendUserMail({ email, name, trialMode }).catch(console.error);
+    sendUserMail({ email, name, trialMode, trialDays: days }).catch(console.error);
   } catch (e) {
     console.error("register error:", e);
     res.status(500).json({ ok: false, error: e?.message || "server error" });
@@ -181,35 +208,36 @@ async function sendAdminMail({ email, name, salonName, prefecture, apps, trialMo
 }
 
 // ---------- ユーザー通知 ----------
-async function sendUserMail({ email, name, trialMode }) {
+async function sendUserMail({ email, name, trialMode, trialDays }) {
   const IOS_AGENT_URL =
   process.env.IOS_AGENT_URL || "https://apps.apple.com/us/app/agentselectnative/id6757728872";
 
   const IOS_TIMER_URL =
   process.env.IOS_TIMER_URL || "https://apps.apple.com/app/irontimernative/id6757497537";
   
-  const ANDROID_LOGIN_URL =
-    process.env.ANDROID_LOGIN_URL || "https://melco-hairdesign.com/pwa/login.html";
+  // カラーカルテ：App Store公開後に Render の環境変数 IOS_COLOR_URL にURLを入れると、メールにリンクが載ります
+  const IOS_COLOR_URL = process.env.IOS_COLOR_URL || "";
+  const COLOR_LINE = IOS_COLOR_URL || "（App Store公開準備中です。公開しましたら改めてご案内いたします）";
 
   
   const subject = trialMode
-    ? "【MELCOCO】体験版のご案内（7日間）"
+    ? `【MELCOCO】体験版のご案内（${trialDays}日間）`
     : "【MELCOCO】本会員のご案内";
 
   const lines = trialMode
   ? [
       `${name} 様`,
       "",
-      "MELCOCO体験版のご案内です。",
-      "",
-      "【iPhone用アイロンタイマー】",
-      IOS_TIMER_URL,
+      `MELCOCO体験版のご案内です。（体験期間：${trialDays}日間）`,
       "",
       "【iPhone用薬剤選定アプリ】",
       IOS_AGENT_URL,
       "",
-      "【Android】",
-      ANDROID_LOGIN_URL,
+      "【iPhone用アイロンタイマー】",
+      IOS_TIMER_URL,
+      "",
+      "【iPhone用カラーカルテ】",
+      COLOR_LINE,
       "",
       "ログインパスワード: melcoco",
       "",
@@ -226,8 +254,8 @@ async function sendUserMail({ email, name, trialMode }) {
       "【iPhone用アイロンタイマー】",
       IOS_TIMER_URL,
       "",
-      "【Android】",
-      ANDROID_LOGIN_URL,
+      "【iPhone用カラーカルテ】",
+      COLOR_LINE,
       "",
       "ログインパスワード: melcoco",
       "",
