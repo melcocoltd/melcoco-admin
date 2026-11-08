@@ -92,7 +92,12 @@ module.exports = function academyContent(admin) {
     const wpRes = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
 
     if (wpRes.status === 404) return null;
-    if (!wpRes.ok) throw new Error(`WP ${wpRes.status}`);
+    if (!wpRes.ok) {
+      // 原因が分かるようにWPのエラーコードもログに出す（パスワード等は出さない）
+      let detail = "";
+      try { const j = await wpRes.json(); detail = `${j.code || ""} ${j.message || ""}`; } catch (e) {}
+      throw new Error(`WP ${wpRes.status} ${detail} (user: ${WP_USER ? "set" : "EMPTY"}, pass: ${WP_APP_PASSWORD ? WP_APP_PASSWORD.replace(/\s/g, "").length + "chars" : "EMPTY"})`);
+    }
 
     const data = await wpRes.json();
     const item = {
