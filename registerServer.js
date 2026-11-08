@@ -108,6 +108,10 @@ function normalizeApps(apps, trialMode) {
 // ---------- ヘルス ----------
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
+// ---------- アカデミー会員ページ（status: active のみ） ----------
+const academyContent = require("./academyContent");
+app.use("/academy", academyContent(admin));
+
 // ---------- 登録 ----------
 app.post("/register", async (req, res) => {
   const { email, name, salonName, prefecture, apps, status, trialDays } = req.body || {};
