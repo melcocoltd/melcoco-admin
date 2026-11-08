@@ -193,7 +193,7 @@ app.post("/register", async (req, res) => {
 
 // ---------- 管理者メール ----------
 async function sendAdminMail({ email, name, salonName, prefecture, apps, trialMode }) {
-  const subject = `【MELCOCO】${trialMode ? "体験版" : "本会員"}アプリ申請`;
+  const subject = trialMode ? "【MELCOCO】体験版アプリ申請" : "【MELCOCO】会員登録申請";
 
   const text = [
     "【申請内容】",
@@ -224,9 +224,12 @@ async function sendUserMail({ email, name, trialMode, trialDays }) {
   const COLOR_LINE = IOS_COLOR_URL || "（App Store公開準備中です。公開しましたら改めてご案内いたします）";
 
   
+  // 会員ページのURL（変更時は Render の環境変数 MEMBERS_URL でも上書き可）
+  const MEMBERS_URL = process.env.MEMBERS_URL || "https://melcoco.jp/education/members.html";
+
   const subject = trialMode
     ? `【MELCOCO】体験版のご案内（${trialDays}日間）`
-    : "【MELCOCO】本会員のご案内";
+    : "【MELCOCO】メルコアカデミー会員ページのご案内";
 
   const lines = trialMode
   ? [
@@ -250,18 +253,19 @@ async function sendUserMail({ email, name, trialMode, trialDays }) {
   : [
       `${name} 様`,
       "",
-      "MELCOCO本会員アプリのご案内です。",
+      "メルコアカデミーへのご登録ありがとうございます。",
+      "会員ページのご案内です。",
       "",
-      "【iPhone用薬剤選定アプリ】",
-      IOS_AGENT_URL,
+      "【会員ページ】",
+      MEMBERS_URL,
       "",
-      "【iPhone用アイロンタイマー】",
-      IOS_TIMER_URL,
+      "【ログイン情報】",
+      `メールアドレス: ${email}`,
+      "パスワード: melcoco",
       "",
-      "【iPhone用カラーカルテ】",
-      COLOR_LINE,
-      "",
-      "ログインパスワード: melcoco",
+      "会員ページから、アプリ（薬剤選定アプリ・アイロンタイマー・カラーカルテ）の",
+      "ダウンロードと使い方ガイド、会員価格の講習会のご案内をご覧いただけます。",
+      "アプリにも同じメールアドレス・パスワードでログインできます。",
       "",
       "MELCOCOサポート",
     ];
