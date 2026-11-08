@@ -75,6 +75,8 @@ module.exports = function academyContent(admin) {
       const snap = await admin.firestore().collection(USERS_COLLECTION).doc(decoded.uid).get();
       const status = snap.exists ? snap.get("status") : null;
       if (status !== "active") return res.status(403).json({ error: "not_active" });
+      req.userRef = snap.ref;
+      req.hasFirstView = !!snap.get("academy.firstViewedAt");
     } catch (e) {
       console.error("[academy] firestore error", e);
       return res.status(500).json({ error: "server_error" });
@@ -118,6 +120,21 @@ module.exports = function academyContent(admin) {
     return item;
   }
 
+  // ---------- 閲覧記録（users/{uid}.academy） ----------
+  //  viewCount     … 会員ページを開いた回数（再読み込みも1回）
+  //  lastViewedAt  … 最後に開いた日時
+  //  firstViewedAt … 初めて開いた日時
+  async function recordView(req) {
+    if (!req.userRef) return;
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const update = {
+      "academy.viewCount": admin.firestore.FieldValue.increment(1),
+      "academy.lastViewedAt": now,
+    };
+    if (!req.hasFirstView) update["academy.firstViewedAt"] = now;
+    await req.userRef.update(update);
+  }
+
   // ---------- ルート ----------
   router.get("/content", requireActiveMember, async (req, res) => {
     const id = String(req.query.id || ALLOWED_IDS[0] || "");
@@ -128,6 +145,7 @@ module.exports = function academyContent(admin) {
       if (!item) return res.status(404).json({ error: "not_found" });
       res.setHeader("Cache-Control", "no-store");
       res.json({ title: item.title, html: item.html });
+      recordView(req).catch((e) => console.error("[academy] view log error", e));
     } catch (e) {
       console.error("[academy] wp error", e);
       res.status(502).json({ error: "wp_error" });
