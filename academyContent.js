@@ -16,6 +16,7 @@
 //     WP_USER            … WPのユーザー名（編集者以上）
 //     WP_APP_PASSWORD    … そのユーザーで発行したアプリケーションパスワード
 //     ACADEMY_WP_IDS     … 表示を許可するLPのID（カンマ区切り） 例: 5478
+//     WP_LP_PASSWORD     … LPに設定した「パスワード保護」のパスワード（会員には教えない）
 //   任意:
 //     WP_API_BASE        … 既定 https://melcoco.jp/wp-json/wp/v2
 //     WP_POST_TYPE       … 既定 lp
@@ -34,6 +35,7 @@ module.exports = function academyContent(admin) {
   const WP_POST_TYPE = process.env.WP_POST_TYPE || "lp";
   const WP_USER = process.env.WP_USER || "";
   const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD || "";
+  const WP_LP_PASSWORD = process.env.WP_LP_PASSWORD || "";
   const USERS_COLLECTION = process.env.USERS_COLLECTION || "users";
   const ALLOWED_IDS = (process.env.ACADEMY_WP_IDS || "5478")
     .split(",").map((s) => s.trim()).filter(Boolean);
@@ -87,16 +89,23 @@ module.exports = function academyContent(admin) {
     const hit = cache.get(id);
     if (hit && Date.now() - hit.at < CACHE_MS) return hit;
 
-    const auth = Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString("base64");
-    const url = `${WP_API_BASE}/${WP_POST_TYPE}/${encodeURIComponent(id)}?_fields=title,content`;
-    const wpRes = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
+    // ① LPがパスワード保護 → ?password= で取得（WPサーバー設定に左右されない）
+    // ② LPが非公開 → アプリケーションパスワード（Basic認証）で取得
+    const params = new URLSearchParams({ _fields: "title,content" });
+    if (WP_LP_PASSWORD) params.set("password", WP_LP_PASSWORD);
+    const url = `${WP_API_BASE}/${WP_POST_TYPE}/${encodeURIComponent(id)}?${params}`;
+    const headers = {};
+    if (WP_USER && WP_APP_PASSWORD) {
+      headers.Authorization = `Basic ${Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString("base64")}`;
+    }
+    const wpRes = await fetch(url, { headers });
 
     if (wpRes.status === 404) return null;
     if (!wpRes.ok) {
       // 原因が分かるようにWPのエラーコードもログに出す（パスワード等は出さない）
       let detail = "";
       try { const j = await wpRes.json(); detail = `${j.code || ""} ${j.message || ""}`; } catch (e) {}
-      throw new Error(`WP ${wpRes.status} ${detail} (user: ${WP_USER ? "set" : "EMPTY"}, pass: ${WP_APP_PASSWORD ? WP_APP_PASSWORD.replace(/\s/g, "").length + "chars" : "EMPTY"})`);
+      throw new Error(`WP ${wpRes.status} ${detail} (lpPassword: ${WP_LP_PASSWORD ? "set" : "EMPTY"}, appPassword: ${WP_APP_PASSWORD ? "set" : "EMPTY"})`);
     }
 
     const data = await wpRes.json();
