@@ -17,6 +17,7 @@
 //     WP_APP_PASSWORD    … そのユーザーで発行したアプリケーションパスワード
 //     ACADEMY_WP_IDS     … 表示を許可するLPのID（カンマ区切り） 例: 5478
 //     WP_LP_PASSWORD     … LPに設定した「パスワード保護」のパスワード（会員には教えない）
+//     MEMBER_INSTAGRAM_URL … 会員用InstagramのURL（active会員にだけ返す）
 //   任意:
 //     WP_API_BASE        … 既定 https://melcoco.jp/wp-json/wp/v2
 //     WP_POST_TYPE       … 既定 lp
@@ -36,6 +37,10 @@ module.exports = function academyContent(admin) {
   const WP_USER = process.env.WP_USER || "";
   const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD || "";
   const WP_LP_PASSWORD = process.env.WP_LP_PASSWORD || "";
+  // 会員用リンク（HTMLには書かず、active会員にだけ返す）
+  const MEMBER_LINKS = {
+    instagram: process.env.MEMBER_INSTAGRAM_URL || "",
+  };
   const USERS_COLLECTION = process.env.USERS_COLLECTION || "users";
   const ALLOWED_IDS = (process.env.ACADEMY_WP_IDS || "5478")
     .split(",").map((s) => s.trim()).filter(Boolean);
@@ -144,7 +149,7 @@ module.exports = function academyContent(admin) {
       const item = await fetchWpContent(id);
       if (!item) return res.status(404).json({ error: "not_found" });
       res.setHeader("Cache-Control", "no-store");
-      res.json({ title: item.title, html: item.html });
+      res.json({ title: item.title, html: item.html, links: MEMBER_LINKS });
       recordView(req).catch((e) => console.error("[academy] view log error", e));
     } catch (e) {
       console.error("[academy] wp error", e);
