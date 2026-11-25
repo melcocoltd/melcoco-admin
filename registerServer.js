@@ -210,11 +210,18 @@ button{background:#222;color:#fff;border:0}#r{margin-top:12px;white-space:pre-wr
 <h2>パスワードを melcoco に戻す</h2>
 <input id="e" type="email" placeholder="会員のメールアドレス" autocapitalize="off">
 <input id="t" type="password" placeholder="管理用の合言葉">
-<button onclick="go()">melcoco に戻す</button><div id="r"></div>
+<button onclick="go()">melcoco に戻す</button>
+<button onclick="all_()" style="background:#666">全員を点検して、消えているアカウントを作り直す</button><div id="r"></div>
 <script>async function go(){const r=document.getElementById('r');r.textContent='処理中…';
 try{const res=await fetch('/admin/reset',{method:'POST',headers:{'Content-Type':'application/json'},
 body:JSON.stringify({email:document.getElementById('e').value,token:document.getElementById('t').value})});
-const j=await res.json();r.textContent=j.ok?'完了：'+j.email+' のパスワードを melcoco にしました':'エラー：'+j.error;}
+const j=await res.json();r.textContent=j.ok?(j.recreated?'完了：'+j.email+' のアカウントを作り直しました（パスワード melcoco）':'完了：'+j.email+' のパスワードを melcoco にしました'):'エラー：'+j.error;}
+catch(e){r.textContent='エラー：'+e.message}}
+async function all_(){const r=document.getElementById('r');r.textContent='点検中…（少し時間がかかります）';
+try{const res=await fetch('/admin/repair-all',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({token:document.getElementById('t').value})});const j=await res.json();
+if(!j.ok){r.textContent='エラー：'+j.error;return;}
+r.textContent='点検した人数：'+j.checked+'\\n\\n作り直した人（パスワード melcoco）：'+j.fixed.length+'人\\n'+j.fixed.join('\\n')+(j.failed.length?'\\n\\n失敗：\\n'+j.failed.join('\\n'):'');}
 catch(e){r.textContent='エラー：'+e.message}}</script></body></html>`);
 });
 
@@ -226,14 +233,76 @@ app.post("/admin/reset", async (req, res) => {
   if (token !== ADMIN_TOKEN) return res.status(403).json({ ok: false, error: "合言葉が違います" });
   if (!email) return res.status(400).json({ ok: false, error: "メールアドレスを入れてください" });
   try {
-    const u = await auth.getUserByEmail(email);
-    await auth.updateUser(u.uid, { password: "melcoco", disabled: false });
-    res.json({ ok: true, email: u.email });
-  } catch (e) {
-    if (e?.code === "auth/user-not-found") {
-      return res.status(404).json({ ok: false, error: "このメールアドレスのアカウントはありません" });
+    let u;
+    try {
+      u = await auth.getUserByEmail(email);
+      await auth.updateUser(u.uid, { password: "melcoco", disabled: false });
+      return res.json({ ok: true, email: u.email });
+    } catch (e) {
+      if (e?.code !== "auth/user-not-found") throw e;
     }
+    // ログイン用アカウントが消えている → 会員データ（Firestore）から同じIDで作り直す
+    const doc = await findUserDocByEmail(email);
+    if (!doc) {
+      return res.status(404).json({ ok: false, error: "このメールアドレスの会員データもアカウントもありません" });
+    }
+    await createAuthForDoc(doc.id, email, doc.data()?.displayName);
+    res.json({ ok: true, email, recreated: true });
+  } catch (e) {
     console.error("admin reset error:", e);
+    res.status(500).json({ ok: false, error: e?.message || "server error" });
+  }
+});
+
+// 会員データ（Firestore）をメールアドレスで探す（大文字・小文字の違いも吸収）
+async function findUserDocByEmail(email) {
+  const target = String(email || "").trim().toLowerCase();
+  let q = await db.collection("users").where("email", "==", target).limit(1).get();
+  if (!q.empty) return q.docs[0];
+  const all = await db.collection("users").get();
+  return all.docs.find((d) => String(d.data()?.email || "").trim().toLowerCase() === target) || null;
+}
+
+// 会員データと同じIDでログイン用アカウントを作る（パスワードは melcoco）
+async function createAuthForDoc(uid, email, displayName) {
+  const params = { uid, email: String(email).trim().toLowerCase(), password: "melcoco" };
+  if (displayName) params.displayName = String(displayName);
+  return auth.createUser(params);
+}
+
+// まとめて点検：会員データはあるのにログイン用アカウントが無い人を、全員作り直す
+app.post("/admin/repair-all", async (req, res) => {
+  const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
+  if (!ADMIN_TOKEN || req.body?.token !== ADMIN_TOKEN) {
+    return res.status(403).json({ ok: false, error: "合言葉が違います" });
+  }
+  const fixed = [];
+  const failed = [];
+  try {
+    const all = await db.collection("users").get();
+    for (const d of all.docs) {
+      const data = d.data() || {};
+      const email = String(data.email || "").trim().toLowerCase();
+      if (!email) continue;
+      try {
+        await auth.getUser(d.id);
+        continue; // アカウントあり
+      } catch (e) {
+        if (e?.code !== "auth/user-not-found") {
+          failed.push(`${data.displayName || ""} ${email}：${e?.message}`);
+          continue;
+        }
+      }
+      try {
+        await createAuthForDoc(d.id, email, data.displayName);
+        fixed.push(`${data.displayName || ""} ${email}`);
+      } catch (e) {
+        failed.push(`${data.displayName || ""} ${email}：${e?.code || e?.message}`);
+      }
+    }
+    res.json({ ok: true, checked: all.size, fixed, failed });
+  } catch (e) {
+    console.error("repair-all error:", e);
     res.status(500).json({ ok: false, error: e?.message || "server error" });
   }
 });
