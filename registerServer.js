@@ -114,7 +114,8 @@ app.use("/academy", academyContent(admin));
 
 // ---------- 登録 ----------
 app.post("/register", async (req, res) => {
-  const { email, name, salonName, prefecture, apps, status, trialDays } = req.body || {};
+  const { name, salonName, prefecture, apps, status, trialDays } = req.body || {};
+  const email = String(req.body?.email || "").trim().toLowerCase();
 
   if (!email || !salonName || !prefecture || !name || !status) {
     return res.status(400).json({ ok: false, error: "必要な情報が不足しています。" });
@@ -136,7 +137,12 @@ app.post("/register", async (req, res) => {
       });
     } catch (e) {
       if (e?.code === "auth/email-already-exists") {
-        userRecord = await auth.getUserByEmail(email);
+        // 既にアカウントがある人（作り直し・体験版→本会員など）も、パスワードを melcoco に戻す
+        const existing = await auth.getUserByEmail(email);
+        userRecord = await auth.updateUser(existing.uid, {
+          password: defaultPassword,
+          disabled: false,
+        });
       } else {
         throw e;
       }
@@ -187,6 +193,47 @@ app.post("/register", async (req, res) => {
     sendUserMail({ email, name, trialMode, trialDays: days }).catch(console.error);
   } catch (e) {
     console.error("register error:", e);
+    res.status(500).json({ ok: false, error: e?.message || "server error" });
+  }
+});
+
+// ---------- 管理用：パスワードを melcoco に戻す ----------
+// Render の環境変数 ADMIN_TOKEN に好きな合言葉を入れると使えます（未設定なら使えません）
+// ブラウザで https://（サーバーのURL）/admin/reset を開く
+app.get("/admin/reset", (_req, res) => {
+  res.type("html").send(`<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>パスワードを melcoco に戻す</title>
+<style>body{font-family:-apple-system,sans-serif;max-width:420px;margin:40px auto;padding:0 16px;color:#222}
+input,button{width:100%;padding:12px;margin:6px 0;font-size:16px;box-sizing:border-box;border:1px solid #ccc;border-radius:8px}
+button{background:#222;color:#fff;border:0}#r{margin-top:12px;white-space:pre-wrap}</style></head><body>
+<h2>パスワードを melcoco に戻す</h2>
+<input id="e" type="email" placeholder="会員のメールアドレス" autocapitalize="off">
+<input id="t" type="password" placeholder="管理用の合言葉">
+<button onclick="go()">melcoco に戻す</button><div id="r"></div>
+<script>async function go(){const r=document.getElementById('r');r.textContent='処理中…';
+try{const res=await fetch('/admin/reset',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({email:document.getElementById('e').value,token:document.getElementById('t').value})});
+const j=await res.json();r.textContent=j.ok?'完了：'+j.email+' のパスワードを melcoco にしました':'エラー：'+j.error;}
+catch(e){r.textContent='エラー：'+e.message}}</script></body></html>`);
+});
+
+app.post("/admin/reset", async (req, res) => {
+  const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
+  const { token } = req.body || {};
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  if (!ADMIN_TOKEN) return res.status(403).json({ ok: false, error: "ADMIN_TOKEN が設定されていません" });
+  if (token !== ADMIN_TOKEN) return res.status(403).json({ ok: false, error: "合言葉が違います" });
+  if (!email) return res.status(400).json({ ok: false, error: "メールアドレスを入れてください" });
+  try {
+    const u = await auth.getUserByEmail(email);
+    await auth.updateUser(u.uid, { password: "melcoco", disabled: false });
+    res.json({ ok: true, email: u.email });
+  } catch (e) {
+    if (e?.code === "auth/user-not-found") {
+      return res.status(404).json({ ok: false, error: "このメールアドレスのアカウントはありません" });
+    }
+    console.error("admin reset error:", e);
     res.status(500).json({ ok: false, error: e?.message || "server error" });
   }
 });
