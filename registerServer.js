@@ -488,6 +488,36 @@ app.post("/admin/api/users/:uid/fix-login", requireAdmin, async (req, res) => {
   }
 });
 
+// 退会者の削除（会員データとログイン用アカウントを両方消す・元に戻せない）
+app.post("/admin/api/users/:uid/delete", requireAdmin, async (req, res) => {
+  const uid = req.params.uid;
+  try {
+    const ref = db.collection("users").doc(uid);
+    const snap = await ref.get();
+    const email = String(snap.data()?.email || "").trim().toLowerCase();
+    try {
+      await auth.deleteUser(uid);
+    } catch (e) {
+      if (e?.code !== "auth/user-not-found") throw e;
+    }
+    // 同じメールで別IDのアカウントが残っていて、そのIDの会員データが無ければ一緒に消す
+    if (email) {
+      try {
+        const other = await auth.getUserByEmail(email);
+        const otherDoc = await db.collection("users").doc(other.uid).get();
+        if (!otherDoc.exists) await auth.deleteUser(other.uid);
+      } catch (e) {
+        if (e?.code !== "auth/user-not-found") throw e;
+      }
+    }
+    if (snap.exists) await ref.delete();
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("admin delete error:", e);
+    res.status(500).json({ ok: false, error: e?.message || "server error" });
+  }
+});
+
 const ADMIN_PAGE_HTML = String.raw`<!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -691,6 +721,8 @@ function card(u){
     + '</div><div class="actions">'
     + (needsFix(u) ? '' : fixBtn)
     + '<button class="btn" onclick="resetDevice(\''+u.uid+'\',\'\')">全アプリの端末登録を外す</button>'
+    + '</div><div class="actions" style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)">'
+    + '<button class="btn" style="color:var(--bad);border-color:#f2b8c2" onclick="removeUser(\''+u.uid+'\')">退会者として削除</button>'
     + '</div><div class="meta" style="margin-top:8px">ID: '+u.uid+'</div>'
     + '</div></div>';
 }
@@ -716,6 +748,16 @@ function resetDevice(uid, app){
   if (!confirm(app ? "この端末登録を外します。次にログインした端末が登録されます。" : "全アプリの端末登録を外します。")) return;
   api("/admin/api/users/"+uid+"/reset-device", {app: app}).then(function(j){
     if (j.ok) { toast("端末登録を外しました"); load(); } else toast("エラー：" + j.error);
+  });
+}
+function removeUser(uid){
+  var u = find(uid);
+  var nm = u.displayName || u.email;
+  var t = prompt(nm + " さんを削除します。\n会員データとログイン用アカウントが消え、元に戻せません。\n\n削除する場合は「削除」と入力してください。");
+  if (t === null) return;
+  if (t.trim() !== "削除") { toast("「削除」と入力されなかったので中止しました"); return; }
+  api("/admin/api/users/"+uid+"/delete", {}).then(function(j){
+    if (j.ok) { toast(nm + " さんを削除しました"); delete OPEN[uid]; load(); } else toast("エラー：" + j.error);
   });
 }
 function fixLogin(uid){
